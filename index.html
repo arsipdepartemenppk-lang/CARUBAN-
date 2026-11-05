@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Caruban Core Mobile</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png" />
+    <link rel="apple-touch-icon" href="https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png" />
+    <meta name="theme-color" content="#020617" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="stylesheet" href="https://unpkg.com/react-leaflet-markercluster/dist/styles.min.css" />
+    <script>
+      (function() {
+        // Intercept Vite HMR WebSocket connections to prevent 'WebSocket closed without opened' errors in cloud proxy
+        if (typeof window !== 'undefined' && window.WebSocket) {
+          var RealWebSocket = window.WebSocket;
+          function MockViteWebSocket() {
+            this.readyState = 1; // WebSocket.OPEN
+            this.binaryType = 'blob';
+            this.listeners = {};
+          }
+          MockViteWebSocket.prototype.addEventListener = function(event, handler) {
+            if (!this.listeners[event]) this.listeners[event] = [];
+            this.listeners[event].push(handler);
+            if (event === 'open') {
+              var self = this;
+              setTimeout(function() {
+                try { handler.call(self, { type: 'open' }); } catch (e) {}
+              }, 0);
+            }
+          };
+          MockViteWebSocket.prototype.removeEventListener = function(event, handler) {
+            if (this.listeners[event]) {
+              this.listeners[event] = this.listeners[event].filter(function(h) { return h !== handler; });
+            }
+          };
+          MockViteWebSocket.prototype.dispatchEvent = function() { return true; };
+          MockViteWebSocket.prototype.send = function() {};
+          MockViteWebSocket.prototype.close = function() {
+            this.readyState = 3;
+          };
+
+          var PatchedWebSocket = function(url, protocols) {
+            var isViteHmr = false;
+            if (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1)) {
+              isViteHmr = true;
+            } else if (typeof url === 'string' && (url.indexOf('vite-hmr') !== -1 || url.indexOf('token=') !== -1)) {
+              isViteHmr = true;
+            }
+            if (isViteHmr) {
+              return new MockViteWebSocket();
+            }
+            return new RealWebSocket(url, protocols);
+          };
+          PatchedWebSocket.prototype = RealWebSocket.prototype;
+          PatchedWebSocket.CONNECTING = 0;
+          PatchedWebSocket.OPEN = 1;
+          PatchedWebSocket.CLOSING = 2;
+          PatchedWebSocket.CLOSED = 3;
+          window.WebSocket = PatchedWebSocket;
+        }
+
+        var isIgnored = function(val) {
+          if (!val) return false;
+          var str = typeof val === 'string' ? val : (val.message || (val.toString ? val.toString() : ''));
+          return str.indexOf('WebSocket closed without opened') !== -1 ||
+                 str.indexOf('WebSocket connection to') !== -1 ||
+                 str.indexOf('ECONNREFUSED') !== -1 ||
+                 str.indexOf('Connection reset') !== -1 ||
+                 str.indexOf('publickey-credentials-create') !== -1 ||
+                 str.indexOf('Timeout starting video source') !== -1 ||
+                 str.indexOf('Cannot transition to a new state') !== -1;
+        };
+
+        window.addEventListener('error', function(e) {
+          if (isIgnored(e.message) || isIgnored(e.error)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          if (isIgnored(e.reason)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        var origError = console.error;
+        console.error = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isIgnored(arguments[i])) return;
+          }
+          origError.apply(console, arguments);
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

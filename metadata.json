@@ -1,0 +1,16 @@
+{
+  "name": "Caruban Core Mobilev1",
+  "description": "Aplikasi manajemen organisasi futuristik untuk PC IPNU dan IPPNU Kabupaten Cirebon, mencakup data anggota, visitasi, persuratan resmi, amaliyah, kaderisasi, dan perpustakaan digital.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera",
+    "microphone",
+    "display-capture",
+    "serial",
+    "bluetooth",
+    "notifications"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

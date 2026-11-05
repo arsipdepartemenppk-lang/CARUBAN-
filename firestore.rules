@@ -1,0 +1,222 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Global Helpers
+    // ===============================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isSystemAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "arsipdepartemenppk@gmail.com" ||
+        request.auth.token.email == "arsipdepartemenpendidikan@gmail.com" ||
+        request.auth.token.email == "syifaudina15@gmail.com" ||
+        request.auth.token.email.matches('.*syifaudin.*')
+      );
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSystemAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'admin');
+    }
+
+    function isPC() {
+      return isAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'PC');
+    }
+
+    function isPK() {
+      return isPC() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'PK');
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (request.auth.uid == userId && 
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'poinSkill', 'completedMateri', 'nama', 'displayName', 'email', 'photoURL', 
+           'lastLogin', 'notificationSettings', 'phoneNumber', 'googleCalendarTokens',
+           'fcmToken', 'lastTokenUpdate', 'uid', 'isAnonymous', 'updatedAt'
+         ]))
+      );
+      allow delete: if isAdmin();
+      
+      match /kader_logs/{logId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Status & Presence
+    match /user_status/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == userId;
+    }
+    match /presence/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == userId;
+    }
+    match /typing/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+    }
+
+    // Members & Management
+    match /members/{memberId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isPC();
+    }
+    match /pks/{pkId} {
+      allow read: if isSignedIn();
+      allow create, update: if isPC();
+      allow delete: if isAdmin();
+    }
+    match /pimpinan/{pimpinanId} {
+      allow read: if isSignedIn();
+      allow create, update: if isPC();
+      allow delete: if isAdmin();
+    }
+    match /visitasis/{visitasiId} {
+      allow read: if isSignedIn();
+      allow create, update: if isPC();
+      allow delete: if isAdmin();
+    }
+
+    // Documents & Finance
+    match /suratMasuk/{suratId} {
+      allow read: if isSignedIn();
+      allow create, update: if isPK();
+      allow delete: if isAdmin();
+    }
+    match /suratKeluar/{suratId} {
+      allow read: if isSignedIn();
+      allow create, update: if isPK();
+      allow delete: if isAdmin();
+    }
+    match /kas_transaksi/{id} {
+      allow read: if isSignedIn();
+      allow create: if isPK();
+      allow update, delete: if isAdmin();
+    }
+    match /kas_inventaris/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPK();
+    }
+    match /arsip_digital/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+    match /media_storage/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn() && (resource.data.uploadedBy == request.auth.uid || isAdmin());
+    }
+
+    // Activities & Monitoring
+    match /activity_logs/{id} {
+      allow read: if isSignedIn(); // Allow all signed in users to see recent activity on Beranda
+      allow create: if isSignedIn();
+    }
+    match /activities/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /visitations/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /attendances/{id} {
+      allow read: if isSignedIn();
+      allow create: if true; // Allow guest check-ins and authenticated users
+      allow update, delete: if isAdmin();
+    }
+    match /agendas/{id} {
+      allow read: if true; // Allow guests to see agendas (for check-in context)
+      allow write: if isPK();
+    }
+    match /kunjungan/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+    match /core_evaluations/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPK();
+    }
+
+    // Learning & Resources
+    match /materi/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPC();
+    }
+    match /kaderisasi/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPC();
+    }
+    match /beasiswa/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPC();
+    }
+    match /templates/{id} {
+      allow read: if isSignedIn();
+      allow write: if isPK();
+    }
+
+    // Social & Communication
+    match /internal_posts/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isSignedIn() && (
+        (resource.data.authorUid == request.auth.uid) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'comments', 'upvotes', 'downvotes']))
+      );
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.authorUid == request.auth.uid);
+    }
+    match /stories/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.authorUid == request.auth.uid);
+    }
+    match /chat_rooms/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (request.auth.uid in resource.data.members || isAdmin());
+      allow delete: if isAdmin();
+    }
+    match /chats/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.senderId == request.auth.uid);
+    }
+    match /followers/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.followerId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.followerId == request.auth.uid;
+    }
+
+    // Notifications
+    match /notifications/{id} {
+      allow read, write: if isSignedIn();
+    }
+    match /global_notifications/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}

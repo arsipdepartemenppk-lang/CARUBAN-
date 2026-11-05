@@ -1,0 +1,481 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  FileText, Plus, Search, Filter, Download, Trash2, Edit2, 
+  Calendar, CheckCircle, Clock, X, Send, Eye, FileDown, Camera
+} from 'lucide-react';
+import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useFirebase } from '../components/FirebaseProvider';
+import { useToast } from '../components/Toast';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { motion, AnimatePresence } from 'framer-motion';
+import { cn } from '../lib/utils';
+import * as XLSX from 'xlsx';
+import { DocumentScanner } from '../components/DocumentScanner';
+import { uploadMedia } from '../utils/uploadUtils';
+
+export interface SuratKeluarItem {
+  id: string;
+  nomorSurat: string;
+  tanggalKirim: string;
+  tujuanSurat: string;
+  perihal: string;
+  penandatangan: string;
+  status: 'Terkirim' | 'Konfirmasi' | 'Diarsipkan';
+  fileUrl?: string;
+  createdAt?: string;
+}
+
+export const SuratKeluar: React.FC = () => {
+  const { user } = useFirebase();
+  const { showToast } = useToast();
+  const [suratList, setSuratList] = useState<SuratKeluarItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const [formData, setFormData] = useState<{
+    nomorSurat: string;
+    tanggalKirim: string;
+    tujuanSurat: string;
+    perihal: string;
+    penandatangan: string;
+    status: SuratKeluarItem['status'];
+    fileUrl: string;
+  }>({
+    nomorSurat: '',
+    tanggalKirim: new Date().toISOString().slice(0, 10),
+    tujuanSurat: '',
+    perihal: '',
+    penandatangan: 'Ketua Cabang & Sekretaris',
+    status: 'Terkirim',
+    fileUrl: ''
+  });
+
+  useEffect(() => {
+    const q = query(collection(db, 'suratKeluar'), orderBy('tanggalKirim', 'desc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SuratKeluarItem));
+      setSuratList(data);
+      setLoading(false);
+    }, (err) => {
+      console.error('Error fetching suratKeluar:', err);
+      showToast('Gagal memuat surat keluar', 'error');
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.nomorSurat.trim() || !formData.tujuanSurat.trim()) {
+      showToast('Nomor surat dan tujuan surat wajib diisi', 'error');
+      return;
+    }
+
+    try {
+      if (editingId) {
+        await updateDoc(doc(db, 'suratKeluar', editingId), {
+          ...formData,
+          updatedAt: new Date().toISOString()
+        });
+        showToast('Data surat keluar diperbarui', 'success');
+      } else {
+        await addDoc(collection(db, 'suratKeluar'), {
+          ...formData,
+          createdAt: new Date().toISOString(),
+          createdBy: user?.uid || 'system'
+        });
+        showToast('Surat keluar baru berhasil dicatat', 'success');
+      }
+      setIsModalOpen(false);
+      setEditingId(null);
+    } catch (err: any) {
+      showToast('Gagal menyimpan: ' + err.message, 'error');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteConfirmId) return;
+    try {
+      await deleteDoc(doc(db, 'suratKeluar', deleteConfirmId));
+      showToast('Surat keluar berhasil dihapus', 'success');
+      setDeleteConfirmId(null);
+    } catch (err: any) {
+      showToast('Gagal menghapus: ' + err.message, 'error');
+    }
+  };
+
+  const handleScanUpload = async (blob: Blob) => {
+    if (!user) return;
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const url = await uploadMedia(blob, 'surat_keluar', user.uid, (progress) => {
+        setUploadProgress(progress);
+      });
+      setFormData(prev => ({ ...prev, fileUrl: url }));
+      showToast('Scan dokumen berhasil diunggah', 'success');
+    } catch (err: any) {
+      showToast('Gagal mengunggah scan: ' + err.message, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleExport = () => {
+    const exportData = suratList.map(s => ({
+      'Nomor Surat': s.nomorSurat,
+      'Tanggal Kirim': s.tanggalKirim,
+      'Tujuan Surat': s.tujuanSurat,
+      'Perihal': s.perihal,
+      'Penandatangan': s.penandatangan || '-',
+      'Status': s.status
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Surat Keluar');
+    XLSX.writeFile(wb, `Buku_Agenda_Surat_Keluar_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast('Buku agenda surat keluar diunduh', 'success');
+  };
+
+  const filtered = suratList.filter(s => 
+    s.nomorSurat.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    s.tujuanSurat.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    s.perihal.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="p-4 md:p-8 min-h-screen bg-[var(--bg-app)] text-[var(--text-main)] space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--border-main)] pb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/20">
+              Agenda Persuratan
+            </span>
+          </div>
+          <h1 className="text-2xl md:text-3xl font-black tracking-tight text-[var(--text-main)] flex items-center gap-3">
+            <Send className="text-rose-400" />
+            Buku Agenda Surat Keluar
+          </h1>
+          <p className="text-sm text-[var(--text-muted)]">
+            Penomoran otomatis dan inventarisasi berkas surat keluar PC IPNU Kabupaten Cirebon.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-main)] text-xs font-bold text-[var(--text-main)] hover:bg-[var(--bg-app)] transition-all shadow-sm"
+          >
+            <Download size={16} className="text-rose-400" />
+            Export Excel
+          </button>
+
+          <button
+            onClick={() => {
+              setEditingId(null);
+              setFormData({
+                nomorSurat: '',
+                tanggalKirim: new Date().toISOString().slice(0, 10),
+                tujuanSurat: '',
+                perihal: '',
+                penandatangan: 'Ketua Cabang & Sekretaris',
+                status: 'Terkirim',
+                fileUrl: ''
+              });
+              setIsModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg shadow-rose-600/20 active:scale-95 transition-all"
+          >
+            <Plus size={16} /> Catat Surat Keluar
+          </button>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="bg-[var(--bg-card)] p-4 rounded-3xl border border-[var(--border-main)] shadow-sm">
+        <div className="relative w-full md:w-96">
+          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            type="text"
+            placeholder="Cari nomor surat, tujuan, atau perihal..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-[var(--text-main)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+          />
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-[var(--bg-card)] rounded-3xl border border-[var(--border-main)] shadow-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-[var(--border-main)] bg-[var(--bg-app)]/50 text-[11px] uppercase tracking-wider text-[var(--text-muted)] font-black">
+                <th className="py-4 px-6">Nomor & Tanggal Kirim</th>
+                <th className="py-4 px-6">Tujuan Surat</th>
+                <th className="py-4 px-6">Perihal</th>
+                <th className="py-4 px-6">Status & Penandatangan</th>
+                <th className="py-4 px-6 text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border-main)] text-xs">
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-[var(--text-muted)]">
+                    <div className="w-8 h-8 border-3 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                    Memuat arsip surat keluar...
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-[var(--text-muted)]">
+                    Tidak ada surat keluar yang sesuai pencarian.
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((s) => (
+                  <tr key={s.id} className="hover:bg-[var(--bg-app)]/40 transition-colors group">
+                    <td className="py-4 px-6">
+                      <span className="font-mono font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded text-[11px]">
+                        {s.nomorSurat}
+                      </span>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-1">
+                        <Calendar size={11} /> {s.tanggalKirim}
+                      </p>
+                    </td>
+
+                    <td className="py-4 px-6 font-bold text-[var(--text-main)]">
+                      {s.tujuanSurat}
+                    </td>
+
+                    <td className="py-4 px-6 text-[var(--text-main)]">
+                      <p className="line-clamp-2">{s.perihal}</p>
+                    </td>
+
+                    <td className="py-4 px-6">
+                      <span className={cn(
+                        "px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase",
+                        s.status === 'Diarsipkan' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                        s.status === 'Konfirmasi' ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" :
+                        "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                      )}>
+                        {s.status}
+                      </span>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-1">{s.penandatangan}</p>
+                    </td>
+
+                    <td className="py-4 px-6 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {s.fileUrl && (
+                          <a
+                            href={s.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-xl bg-[var(--bg-app)] hover:text-emerald-400 text-xs font-bold text-[var(--text-muted)] transition-colors"
+                            title="Lihat Berkas"
+                          >
+                            <Eye size={14} />
+                          </a>
+                        )}
+                        <button
+                          onClick={() => {
+                            setEditingId(s.id);
+                            setFormData({
+                              nomorSurat: s.nomorSurat,
+                              tanggalKirim: s.tanggalKirim,
+                              tujuanSurat: s.tujuanSurat,
+                              perihal: s.perihal,
+                              penandatangan: s.penandatangan || '',
+                              status: s.status,
+                              fileUrl: s.fileUrl || ''
+                            });
+                            setIsModalOpen(true);
+                          }}
+                          className="p-2 rounded-xl bg-[var(--bg-app)] hover:text-rose-400 text-xs font-bold text-[var(--text-muted)] transition-colors"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirmId(s.id)}
+                          className="p-2 rounded-xl bg-[var(--bg-app)] hover:text-rose-400 text-xs font-bold text-[var(--text-muted)] transition-colors"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal Add / Edit */}
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[var(--bg-card)] border border-[var(--border-main)] rounded-3xl w-full max-w-xl p-6 md:p-8 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center pb-3 border-b border-[var(--border-main)]">
+                <h3 className="text-lg font-black text-[var(--text-main)] flex items-center gap-2">
+                  <Send className="text-rose-400" />
+                  {editingId ? 'Edit Surat Keluar' : 'Pencatatan Surat Keluar Baru'}
+                </h3>
+                <button onClick={() => setIsModalOpen(false)} className="text-[var(--text-muted)] hover:text-[var(--text-main)]">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSave} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Nomor Surat Resmi</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.nomorSurat}
+                    onChange={(e) => setFormData({ ...formData, nomorSurat: e.target.value })}
+                    placeholder="Contoh: 042/PC/SM/V/2026"
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Tanggal Kirim</label>
+                    <input
+                      type="date"
+                      required
+                      value={formData.tanggalKirim}
+                      onChange={(e) => setFormData({ ...formData, tanggalKirim: e.target.value })}
+                      className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Status</label>
+                    <select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                      className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                    >
+                      <option value="Terkirim">Terkirim</option>
+                      <option value="Konfirmasi">Konfirmasi</option>
+                      <option value="Diarsipkan">Diarsipkan</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Tujuan Surat / Penerima</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.tujuanSurat}
+                    onChange={(e) => setFormData({ ...formData, tujuanSurat: e.target.value })}
+                    placeholder="Contoh: PW IPNU Jawa Barat / Seluruh Ketua PAC"
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Perihal / Hal</label>
+                  <textarea
+                    rows={2}
+                    required
+                    value={formData.perihal}
+                    onChange={(e) => setFormData({ ...formData, perihal: e.target.value })}
+                    placeholder="Contoh: Undangan Rapat Kerja Cabang II"
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Penandatangan</label>
+                  <input
+                    type="text"
+                    value={formData.penandatangan}
+                    onChange={(e) => setFormData({ ...formData, penandatangan: e.target.value })}
+                    placeholder="Ketua Cabang & Sekretaris"
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl p-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <label className="text-xs font-bold text-[var(--text-muted)] block mb-1">Lampiran Digital (Scan)</label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsScannerOpen(true)}
+                      className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-dashed border-[var(--border-main)] text-[var(--text-muted)] hover:border-rose-500 hover:text-rose-400 transition-all text-[10px] font-black uppercase tracking-widest"
+                    >
+                      <Plus size={16} /> {formData.fileUrl ? 'Ganti Scan' : 'Scan Dokumen'}
+                    </button>
+                    {formData.fileUrl && (
+                      <div className="w-12 h-12 rounded-xl border border-[var(--border-main)] overflow-hidden bg-black/20 flex items-center justify-center text-emerald-400">
+                        <CheckCircle size={20} />
+                      </div>
+                    )}
+                  </div>
+                  {uploading && (
+                    <div className="mt-2 h-1 w-full bg-zinc-800 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-rose-500 transition-all duration-300" 
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-[var(--border-main)]">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="px-5 py-2.5 rounded-xl bg-[var(--bg-app)] text-[var(--text-muted)] hover:text-[var(--text-main)] text-xs font-bold"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-md shadow-rose-600/20 active:scale-95"
+                  >
+                    Simpan Surat Keluar
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <ConfirmDialog
+        isOpen={!!deleteConfirmId}
+        title="Hapus Surat Keluar"
+        message="Yakin ingin menghapus arsip surat keluar ini?"
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
+      <DocumentScanner
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onUpload={handleScanUpload}
+        title="Scan Surat Keluar"
+      />
+    </div>
+  );
+};
+
+export default SuratKeluar;
