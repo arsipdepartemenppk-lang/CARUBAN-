@@ -12,12 +12,13 @@ import { auth, db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { Role } from '../types';
-import { LogIn, Mail, Lock, User, Eye, EyeOff, X, Sun, Moon, CheckCircle2, AlertCircle } from 'lucide-react';
+import { LogIn, Mail, Lock, User, Eye, EyeOff, X, Sun, Moon, CheckCircle2, AlertCircle, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '../components/ThemeProvider';
 import { cn } from '../lib/utils';
 import { Logo } from '../components/Logo';
 import { logActivity } from '../utils/activityLogger';
+import { logSecurityAudit } from '../utils/securityEncryption';
 import { Fingerprint } from 'lucide-react';
 import { isBiometricAvailable, authenticateBiometric, registerBiometric } from '../utils/biometricUtils';
 
@@ -44,6 +45,30 @@ export default function Login() {
   const [biometricStep, setBiometricStep] = useState<'prompt' | 'scanning' | 'enroll' | 'success'>('prompt');
   const [biometricStatus, setBiometricStatus] = useState<string>('');
   const navigate = useNavigate();
+
+  // Anti-Brute Force & Cyber Attack Defense Lockout
+  const [failedAttempts, setFailedAttempts] = useState<number>(() => {
+    return Number(sessionStorage.getItem('caruban_failed_logins') || '0');
+  });
+  const [lockoutSeconds, setLockoutSeconds] = useState<number>(() => {
+    const lockUntil = Number(sessionStorage.getItem('caruban_lockout_until') || '0');
+    const remaining = Math.ceil((lockUntil - Date.now()) / 1000);
+    return remaining > 0 ? remaining : 0;
+  });
+
+  React.useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setLockoutSeconds((prev) => {
+        if (prev <= 1) {
+          sessionStorage.removeItem('caruban_lockout_until');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lockoutSeconds]);
 
   React.useEffect(() => {
     const savedEmail = localStorage.getItem('rememberedEmail');
@@ -172,6 +197,11 @@ export default function Login() {
     e.preventDefault();
     setError('');
 
+    if (lockoutSeconds > 0) {
+      setError(`Akses dibatasi sementara demi keamanan dari serangan brute-force. Silakan tunggu ${lockoutSeconds} detik.`);
+      return;
+    }
+
     if (!email || !password) {
       setError('Semua kolom harus diisi.');
       return;
@@ -203,14 +233,29 @@ export default function Login() {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         await logActivity(userCredential.user.uid, userCredential.user.email, 'LOGIN', 'Auth');
         
-        // Auto-assign admin if user is Ahmad Syifaudin
-        const isSyifaudin = 
-          email.toLowerCase().includes('syifaudin') ||
+        // Log successful login to encrypted security audit trail
+        await logSecurityAudit({
+          action: 'LOGIN_SUCCESS',
+          module: 'AUTH_SECURITY',
+          status: 'SUCCESS',
+          userEmail: userCredential.user.email,
+          userId: userCredential.user.uid,
+          reason: 'Pengguna berhasil login melalui otentikasi kata sandi.',
+          metadata: { severity: 'LOW' }
+        });
+
+        // Reset failed attempts upon successful login
+        setFailedAttempts(0);
+        sessionStorage.removeItem('caruban_failed_logins');
+        sessionStorage.removeItem('caruban_lockout_until');
+
+        // Admin email whitelist check
+        const isOfficialAdminEmail = 
           email === 'arsipdepartemenppk@gmail.com' ||
           email === 'arsipdepartemenpendidikan@gmail.com' ||
           email === 'syifaudina15@gmail.com';
 
-        if (isSyifaudin && userCredential.user) {
+        if (isOfficialAdminEmail && userCredential.user) {
           await setDoc(doc(db, 'users', userCredential.user.uid), {
             role: 'admin',
             displayName: userCredential.user.displayName || 'Ahmad Syifaudin',
@@ -220,36 +265,43 @@ export default function Login() {
 
         if (rememberMe) {
           localStorage.setItem('rememberedEmail', email);
-          // Store password encrypted/encoded for biometric simulation (In real app, use refresh tokens)
-          localStorage.setItem(`_secret_p_${btoa(email)}`, btoa(password));
         } else {
           localStorage.removeItem('rememberedEmail');
-          localStorage.removeItem(`_secret_p_${btoa(email)}`);
         }
+        // Clean up legacy insecure password storage if present
+        localStorage.removeItem(`_secret_p_${btoa(email)}`);
       } else {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
         
         await updateProfile(user, { displayName: fullName });
         
-        const isSyifaudin = 
-          email.toLowerCase().includes('syifaudin') ||
-          fullName.toLowerCase().includes('syifaudin') ||
+        const isOfficialAdminEmail = 
           email === 'arsipdepartemenppk@gmail.com' ||
           email === 'arsipdepartemenpendidikan@gmail.com' ||
           email === 'syifaudina15@gmail.com';
 
-        const assignedRole: Role = isSyifaudin ? 'admin' : 'user';
+        // Strict default: new accounts are 'user' unless from strict admin whitelist
+        const assignedRole: Role = isOfficialAdminEmail ? 'admin' : 'user';
 
         await setDoc(doc(db, 'users', user.uid), {
           uid: user.uid,
           email: user.email,
           displayName: fullName,
           role: assignedRole,
-          poinSkill: isSyifaudin ? 100 : 0,
+          poinSkill: isOfficialAdminEmail ? 100 : 0,
           createdAt: new Date().toISOString()
         });
         await logActivity(user.uid, user.email, 'REGISTER', 'Auth');
+        await logSecurityAudit({
+          action: 'ACCOUNT_REGISTER',
+          module: 'AUTH_SECURITY',
+          status: 'SUCCESS',
+          userEmail: user.email,
+          userId: user.uid,
+          reason: `Akun baru terdaftar dengan peran '${assignedRole}'.`,
+          metadata: { severity: 'LOW' }
+        });
       }
 
       // Register biometrics only if strictly supported and not yet registered
@@ -266,6 +318,38 @@ export default function Login() {
       if (err?.code !== 'auth/invalid-credential' && err?.code !== 'auth/user-not-found' && err?.code !== 'auth/wrong-password') {
         console.warn('Auth notice:', err?.code || err);
       }
+
+      // Trigger progressive brute-force defense
+      if (isLogin && (err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password' || err?.code === 'auth/user-not-found')) {
+        const newCount = failedAttempts + 1;
+        setFailedAttempts(newCount);
+        sessionStorage.setItem('caruban_failed_logins', String(newCount));
+
+        if (newCount >= 5) {
+          const duration = newCount >= 10 ? 300 : 60;
+          setLockoutSeconds(duration);
+          sessionStorage.setItem('caruban_lockout_until', String(Date.now() + duration * 1000));
+          
+          await logSecurityAudit({
+            action: 'BRUTE_FORCE_ATTACK_DETECTED',
+            module: 'AUTH_SECURITY',
+            status: 'BLOCKED',
+            userEmail: email || 'unknown',
+            reason: `Terdeteksi ${newCount}x percobaan login gagal berturut-turut. Sistem mengunci proses otentikasi selama ${duration} detik untuk melindungi akun.`,
+            metadata: { severity: 'CRITICAL', duration, failedCount: newCount }
+          });
+        } else {
+          await logSecurityAudit({
+            action: 'FAILED_LOGIN_ATTEMPT',
+            module: 'AUTH_SECURITY',
+            status: 'FAILED',
+            userEmail: email || 'unknown',
+            reason: `Gagal otentikasi login (percobaan ke-${newCount}).`,
+            metadata: { severity: 'MEDIUM', failedCount: newCount }
+          });
+        }
+      }
+
       setError(getFriendlyErrorMessage(err));
     } finally {
       setLoading(false);
@@ -325,19 +409,17 @@ export default function Login() {
       }
 
       setBiometricStatus('Biometrik terverifikasi! Menghubungkan sesi autentikasi...');
-      const savedPass = localStorage.getItem(`_secret_p_${btoa(cleanEmail)}`);
-
-      if (savedPass) {
-        const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, atob(savedPass));
-        await logActivity(userCredential.user.uid, userCredential.user.email, 'BIOMETRIC_LOGIN', 'Auth');
+      
+      // If user is already authenticated in Firebase, biometric confirms presence
+      if (auth.currentUser && auth.currentUser.email?.toLowerCase() === cleanEmail) {
+        await logActivity(auth.currentUser.uid, auth.currentUser.email, 'BIOMETRIC_VERIFIED', 'Auth');
         setBiometricStep('success');
         setTimeout(() => {
           setShowBiometricModal(false);
           navigate('/');
-        }, 1200);
+        }, 1000);
       } else {
-        // If password token is not in local storage, allow quick passcode enrollment
-        setBiometricStatus('Pendaftaran biometrik memerlukan otorisasi sandi akun sekali untuk mengaktifkan login otomatis.');
+        setBiometricStatus('Autentikasi biometrik berhasil. Masukkan kata sandi sekali untuk memulai sesi baru.');
         setBiometricStep('enroll');
       }
     } catch (err: any) {
@@ -354,15 +436,16 @@ export default function Login() {
       return;
     }
 
-    setBiometricStatus('Memverifikasi akun dan mendaftarkan sensor biometrik perangkat...');
+    setBiometricStatus('Memverifikasi kredensial dan mendaftarkan biometrik...');
     try {
       const cleanEmail = biometricEmail.trim().toLowerCase();
       const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, biometricPassword);
       
-      // Register biometrics
-      await registerBiometric(cleanEmail, userCredential.user.displayName || 'Ahmad Syifaudin');
-      localStorage.setItem(`_secret_p_${btoa(cleanEmail)}`, btoa(biometricPassword));
+      // Register biometrics with WebAuthn API (no passwords stored in localStorage!)
+      await registerBiometric(cleanEmail, userCredential.user.displayName || 'Pengurus IPNU IPPNU');
       localStorage.setItem('rememberedEmail', cleanEmail);
+      // Clean up any legacy secret password keys in localStorage
+      localStorage.removeItem(`_secret_p_${btoa(cleanEmail)}`);
       await logActivity(userCredential.user.uid, userCredential.user.email, 'BIOMETRIC_ENROLLED', 'Auth');
 
       setBiometricStep('success');
@@ -370,7 +453,7 @@ export default function Login() {
       setTimeout(() => {
         setShowBiometricModal(false);
         navigate('/');
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
       console.error('Enroll error:', err);
       setBiometricStatus('Kata sandi salah atau akun tidak ditemukan: ' + (err.message || ''));
@@ -385,22 +468,20 @@ export default function Login() {
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
-      const isSyifaudin = 
-        (user.email && user.email.toLowerCase().includes('syifaudin')) ||
-        (user.displayName && user.displayName.toLowerCase().includes('syifaudin')) ||
+      const isOfficialAdminEmail = 
         user.email === 'arsipdepartemenppk@gmail.com' ||
         user.email === 'arsipdepartemenpendidikan@gmail.com' ||
         user.email === 'syifaudina15@gmail.com';
 
-      const assignedRole: Role = isSyifaudin ? 'admin' : 'user';
+      const assignedRole: Role = isOfficialAdminEmail ? 'admin' : 'user';
 
       await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         email: user.email,
-        displayName: user.displayName || (isSyifaudin ? 'Ahmad Syifaudin' : 'Pengguna'),
+        displayName: user.displayName || (isOfficialAdminEmail ? 'Ahmad Syifaudin' : 'Pengguna'),
         photoURL: user.photoURL,
         role: assignedRole,
-        poinSkill: isSyifaudin ? 100 : 0,
+        poinSkill: isOfficialAdminEmail ? 100 : 0,
         createdAt: new Date().toISOString()
       }, { merge: true });
       
@@ -500,6 +581,29 @@ export default function Login() {
               Daftar
             </button>
           </div>
+
+          {/* Cyber Attack Shield Status Indicator */}
+          <div className="flex items-center justify-center gap-1.5 py-1 px-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase tracking-wider mb-3 w-fit mx-auto">
+            <ShieldCheck size={13} className="text-emerald-500" />
+            <span>Anti-DDoS & WAF Shield Aktif</span>
+          </div>
+
+          {/* Progressive Brute-Force Lockout Banner */}
+          {lockoutSeconds > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 flex items-start gap-3 text-xs mb-4 shadow-sm"
+            >
+              <ShieldAlert size={20} className="shrink-0 mt-0.5 text-rose-500" />
+              <div className="text-left space-y-1">
+                <p className="font-black text-rose-700 dark:text-rose-300">Akses Masuk Dikunci Sementara</p>
+                <p className="text-[11px] text-rose-600/90 dark:text-rose-400/90 leading-relaxed">
+                  Terdeteksi aktivitas login anomali/berulang. Sistem secara otomatis menahan akses selama <strong>{lockoutSeconds} detik</strong> untuk mencegah serangan siber brute-force.
+                </p>
+              </div>
+            </motion.div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <AnimatePresence mode="wait">

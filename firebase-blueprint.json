@@ -124,12 +124,14 @@
         "completedMateri": { "type": "array", "items": { "type": "string" } },
         "googleCalendarTokens": { "type": "object" },
         "fcmToken": { "type": "string" },
-        "lastTokenUpdate": { "type": "string", "format": "date-time" }
+        "lastTokenUpdate": { "type": "string", "format": "date-time" },
+        "passwordLastChanged": { "type": "string", "format": "date-time", "description": "Timestamp terakhir kali password akun diperbarui" }
       },
       "required": ["role"]
     }
   },
   "firestore": {
+    "/security_audit_logs/{id}": { "schema": "object", "description": "Log audit akses sensitif terenkripsi AES-256 dan HMAC-SHA256" },
     "/pks/{pkId}": { "schema": "PK", "description": "Koleksi data PK" },
     "/visitasis/{visitasiId}": { "schema": "Visitasi", "description": "Koleksi data Visitasi CORE" },
     "/materi/{materiId}": { "schema": "object", "description": "Koleksi materi belajar" },

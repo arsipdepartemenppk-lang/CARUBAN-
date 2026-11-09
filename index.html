@@ -3,12 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Caruban Core Mobile</title>
+    <title>Caruban Core — PC IPNU IPPNU Kabupaten Cirebon</title>
+    <meta name="description" content="Pusat komando digital resmi PC IPNU IPPNU Kabupaten Cirebon. Kelola keanggotaan, akreditasi komisariat, presensi berbasis biometrik wajah, dan pemetaan wilayah." />
+    <meta property="og:title" content="Caruban Core — PC IPNU IPPNU Kabupaten Cirebon" />
+    <meta property="og:description" content="Pusat komando digital resmi PC IPNU IPPNU Kabupaten Cirebon. Kelola keanggotaan, akreditasi komisariat, presensi berbasis biometrik wajah, dan pemetaan wilayah." />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" type="image/png" href="https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png" />
     <link rel="apple-touch-icon" href="https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png" />
     <meta name="theme-color" content="#020617" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Caruban Core" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="stylesheet" href="https://unpkg.com/react-leaflet-markercluster/dist/styles.min.css" />
     <script>
@@ -71,7 +75,11 @@
                  str.indexOf('Connection reset') !== -1 ||
                  str.indexOf('publickey-credentials-create') !== -1 ||
                  str.indexOf('Timeout starting video source') !== -1 ||
-                 str.indexOf('Cannot transition to a new state') !== -1;
+                 str.indexOf('Cannot transition to a new state') !== -1 ||
+                 str.indexOf('Could not reach Cloud Firestore backend') !== -1 ||
+                 str.indexOf('@firebase/firestore') !== -1 ||
+                 str.indexOf('client will operate in offline mode') !== -1 ||
+                 str.indexOf("Backend didn't respond within 10 seconds") !== -1;
         };
 
         window.addEventListener('error', function(e) {
@@ -89,6 +97,14 @@
             return true;
           }
         }, true);
+
+        var origWarn = console.warn;
+        console.warn = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isIgnored(arguments[i])) return;
+          }
+          origWarn.apply(console, arguments);
+        };
 
         var origError = console.error;
         console.error = function() {

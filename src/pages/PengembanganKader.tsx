@@ -59,10 +59,10 @@ const PengembanganKader: React.FC = () => {
   useEffect(() => {
     if (!user?.uid) return;
     const qLogs = query(collection(db, 'users', user.uid, 'kader_logs'));
-    const unsubLogs = onSnapshot(qLogs, (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), (error) => handleFirestoreError(error, OperationType.LIST, 'kader_logs', auth));
+    const unsubLogs = onSnapshot(qLogs, (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), (error) => console.warn('kader_logs sync notice:', error));
     
     const qPrompts = query(collection(db, 'users', user.uid, 'prompt_library'));
-    const unsubPrompts = onSnapshot(qPrompts, (s) => setPrompts(s.docs.map(d => ({ id: d.id, ...d.data() }))), (error) => handleFirestoreError(error, OperationType.LIST, 'prompt_library', auth));
+    const unsubPrompts = onSnapshot(qPrompts, (s) => setPrompts(s.docs.map(d => ({ id: d.id, ...d.data() }))), (error) => console.warn('prompt_library sync notice:', error));
     
     return () => { unsubLogs(); unsubPrompts(); };
   }, [user?.uid]);

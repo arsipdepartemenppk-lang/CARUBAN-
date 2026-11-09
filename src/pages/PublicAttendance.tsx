@@ -649,7 +649,7 @@ export default function PublicAttendance() {
                     scannerMode === 'camera' ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-white"
                   )}
                 >
-                  <Camera size={14} /> Kamera HP
+                  <Camera size={14} /> Scan via Kamera
                 </button>
               </div>
 

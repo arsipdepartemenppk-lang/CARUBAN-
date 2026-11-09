@@ -123,7 +123,8 @@ const CoreModule: React.FC = () => {
       setEvaluations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CoreEvaluation)));
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'core_evaluations', auth);
+      console.warn('Core evaluations snapshot sync notice:', error);
+      setLoading(false);
     });
     return () => unsub();
   }, []);

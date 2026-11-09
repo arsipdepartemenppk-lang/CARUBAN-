@@ -9,7 +9,7 @@ import { initializeApp, getApps, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { google } from 'googleapis';
 import { v2 as cloudinary } from 'cloudinary';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 // Initialize Gemini AI Client
 const ai = new GoogleGenAI({
@@ -125,6 +125,14 @@ db.serialize(() => {
       FOREIGN KEY(mediaId) REFERENCES media(id)
     )
   `);
+
+  // Security Stats table for WAF persistence
+  db.run(`
+    CREATE TABLE IF NOT EXISTS security_stats (
+      key TEXT PRIMARY KEY,
+      value INTEGER
+    )
+  `);
 });
 
 // Helper to check if columns exist and add them if not
@@ -147,12 +155,123 @@ const oauth2Client = new google.auth.OAuth2(
   `${process.env.APP_URL}/auth/google/callback`
 );
 
+import { waf } from './src/server/waf';
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // 1. Web Application Firewall (WAF) & Anti-DDoS Mitigation Shield (First line of defense)
+  app.use(waf.middleware);
+
   app.use(cors());
-  app.use(express.json({ limit: '50mb' }));
+  // Protect server memory from payload-exhaustion attacks by lowering global body limit to 2MB (media upload uses disk streaming)
+  app.use(express.json({ limit: '2mb' }));
+
+  // --- WAF Persistence with SQLite ---
+  db.all('SELECT key, value FROM security_stats', [], (err, rows: any[]) => {
+    if (!err && rows && rows.length > 0) {
+      const stats: Record<string, number> = {};
+      rows.forEach(row => { stats[row.key] = row.value; });
+      waf.loadStats(stats);
+    }
+  });
+
+  // Periodic persistence every 5 minutes
+  setInterval(() => {
+    const data = waf.getPersistenceData();
+    Object.entries(data).forEach(([key, value]) => {
+      db.run('INSERT OR REPLACE INTO security_stats (key, value) VALUES (?, ?)', [key, value]);
+    });
+  }, 5 * 60 * 1000);
+
+  // --- Web Application Firewall (WAF) Management & Attack Monitor API ---
+  app.get('/api/security/waf-stats', (req, res) => {
+    res.json(waf.getStats());
+  });
+
+  app.post('/api/security/toggle-shield', (req, res) => {
+    const { mode } = req.body;
+    if (mode && ['normal', 'high_alert', 'under_attack'].includes(mode)) {
+      waf.setDefenseMode(mode);
+      return res.json({ success: true, mode: waf.defenseMode });
+    }
+    res.status(400).json({ error: 'Invalid mode. Allowed: normal, high_alert, under_attack' });
+  });
+
+  app.post('/api/security/unban-ip', (req, res) => {
+    const { ip } = req.body;
+    if (!ip) return res.status(400).json({ error: 'Missing IP' });
+    const success = waf.unbanIp(ip);
+    res.json({ success, ip });
+  });
+
+  app.post('/api/security/simulate-mitigation', (req, res) => {
+    const { attackType = 'HTTP_FLOOD', count = 1000 } = req.body;
+    waf.totalAttacksBlocked += Number(count) || 500;
+    if (attackType === 'HTTP_FLOOD') waf.totalFloodAttempts += Number(count) || 500;
+    if (attackType === 'SCANNER_PROBE') waf.totalScannerProbes += Number(count) || 100;
+    if (attackType === 'BRUTE_FORCE') waf.totalBruteForceBlocked += Number(count) || 50;
+    
+    waf.recordAttack(
+      `185.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
+      '/api/auth/login-probe',
+      'POST',
+      `Simulated ${attackType} wave mitigation`,
+      'Mozilla/5.0 (Bot-Attack-Simulation)',
+      'HIGH'
+    );
+    res.json({ success: true, stats: waf.getStats() });
+  });
+
+  app.get('/api/security/deep-audit', async (req, res) => {
+    try {
+      const dbInstance = firestore;
+      if (!dbInstance) throw new Error('Firestore not initialized');
+
+      const collections = ['members', 'database_pimpinan', 'security_audit_logs'];
+      const auditResult: any = {
+        timestamp: new Date().toISOString(),
+        collections: {},
+        overallStatus: 'SECURE',
+        anomalies: []
+      };
+
+      for (const colName of collections) {
+        const snapshot = await dbInstance.collection(colName).limit(100).get();
+        let encryptedCount = 0;
+        let plainCount = 0;
+
+        snapshot.forEach((doc: any) => {
+          const data = doc.data();
+          // Heuristic to check if PII fields are encrypted
+          const isEncrypted = data.isEncrypted === true || 
+                             (data.namaLengkap && typeof data.namaLengkap === 'string' && data.namaLengkap.length > 50) ||
+                             (data.cipherPayload);
+          
+          if (isEncrypted) encryptedCount++;
+          else plainCount++;
+        });
+
+        auditResult.collections[colName] = {
+          totalScanned: snapshot.size,
+          encrypted: encryptedCount,
+          plain: plainCount,
+          health: plainCount === 0 ? 'HEALTHY' : 'WARNING'
+        };
+
+        if (plainCount > 0 && colName !== 'security_audit_logs') {
+          auditResult.overallStatus = 'WARNING';
+          auditResult.anomalies.push(`Koleksi ${colName} memiliki ${plainCount} data tidak terenkripsi.`);
+        }
+      }
+
+      res.json(auditResult);
+    } catch (error: any) {
+      console.error('Deep Audit Error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
 
   // --- Google Calendar OAuth Routes ---
   app.get('/api/auth/google/url', (req, res) => {
@@ -649,21 +768,37 @@ async function startServer() {
   });
 
   // --- Server-Side Gemini API Routes ---
+  const getAIClient = () => {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+    return new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  };
+
   app.post('/api/gemini/generate', async (req, res) => {
     try {
       const { prompt, model, systemInstruction, config } = req.body;
       if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
-      const selectedModel = model || 'gemini-3.8-flash';
-      const requestConfig: any = { ...config };
+      const selectedModel = (model && model !== 'gemini-flash-latest' && model !== 'gemini-2.5-flash') ? model : 'gemini-3.8-flash';
+      const requestConfig: any = { 
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        ...config 
+      };
       if (systemInstruction) {
         requestConfig.systemInstruction = systemInstruction;
       }
 
-      const response = await ai.models.generateContent({
+      const client = getAIClient();
+      const response = await client.models.generateContent({
         model: selectedModel,
         contents: prompt,
-        ...(Object.keys(requestConfig).length > 0 ? { config: requestConfig } : {})
+        config: requestConfig
       });
 
       res.json({ text: response.text });
@@ -681,11 +816,13 @@ async function startServer() {
       const { message, history, systemInstruction, model } = req.body;
       if (!message) return res.status(400).json({ error: 'Message is required' });
 
-      const chat = ai.chats.create({
-        model: model || 'gemini-3.8-flash',
+      const client = getAIClient();
+      const chat = client.chats.create({
+        model: (model && model !== 'gemini-flash-latest' && model !== 'gemini-2.5-flash') ? model : 'gemini-3.8-flash',
         history: history || [],
         config: {
           systemInstruction: systemInstruction || "Anda adalah asisten AI resmi Perpustakaan Digital Caruban Core PC IPNU IPPNU Kabupaten Cirebon.",
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         }
       });
 
@@ -702,21 +839,26 @@ async function startServer() {
       const { message, systemInstruction, model } = req.body;
       if (!message) return res.status(400).json({ error: 'Message is required' });
 
+      const selectedModel = (model && model !== 'gemini-flash-latest' && model !== 'gemini-2.5-flash') ? model : 'gemini-3.8-flash';
+      const client = getAIClient();
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      const responseStream = await ai.models.generateContentStream({
-        model: model || 'gemini-3.8-flash',
+      const responseStream = await client.models.generateContentStream({
+        model: selectedModel,
         contents: message,
         config: {
-          systemInstruction: systemInstruction || "Anda adalah asisten AI senior Perpustakaan Digital Caruban Core untuk PC IPNU dan IPPNU Kabupaten Cirebon. Berikan jawaban yang komprehensif, akurat, dan inspiratif.",
+          systemInstruction: systemInstruction || "Anda adalah asisten AI senior Perpustakaan Digital Caruban Core untuk PC IPNU dan IPPNU Kabupaten Cirebon. Berikan jawaban yang padat, akurat, dan to-the-point.",
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         }
       });
 
       for await (const chunk of responseStream) {
+        if (!chunk.candidates || chunk.candidates.length === 0) continue;
         const text = chunk.text || '';
-        const grounding = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        const grounding = chunk.candidates[0]?.groundingMetadata?.groundingChunks;
         res.write(`data: ${JSON.stringify({ text, grounding })}\n\n`);
       }
 
@@ -727,7 +869,8 @@ async function startServer() {
       if (!res.headersSent) {
         res.status(500).json({ error: error.message || 'Streaming failed' });
       } else {
-        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.write(`data: ${JSON.stringify({ text: '\n\n*(Terjadi kendala pada koneksi stream AI. Silakan coba kembali.)*' })}\n\n`);
+        res.write('data: [DONE]\n\n');
         res.end();
       }
     }
@@ -750,7 +893,8 @@ Panduan penulisan:
 3. Jika ayat ini tidak memiliki sebab turun khusus (ghairu dzat asbab), jelaskan latar belakang konteks umum turunnya ayat di masa Rasulullah SAW (apakah periode Makkiyah atau Madaniyah) dan hikmah utamanya bagi pelajar NU.
 4. Tulis dalam Bahasa Indonesia yang santun, jelas, ringkas, dan mudah dipahami (maksimal 2-3 paragraf).`;
 
-      const response = await ai.models.generateContent({
+      const client = getAIClient();
+      const response = await client.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
       });
@@ -759,6 +903,92 @@ Panduan penulisan:
     } catch (error: any) {
       console.error('Server Asbabun Nuzul Error:', error);
       res.status(500).json({ error: error.message || 'Failed to retrieve Asbabun Nuzul' });
+    }
+  });
+
+  app.post('/api/gemini/generate-agenda', async (req, res) => {
+    try {
+      const { 
+        namaKegiatan, 
+        tingkat = 'PAC', 
+        wilayah = 'Kecamatan Palimanan', 
+        organisasi = 'BERSAMA', 
+        durasiHari = 2, 
+        tanggalMulai, 
+        lokasi = 'Gedung MWC NU', 
+        targetPeserta = 'Kader Pelajar & Santri',
+        catatanKhusus = ''
+      } = req.body;
+
+      if (!namaKegiatan) {
+        return res.status(400).json({ error: 'namaKegiatan is required' });
+      }
+
+      const prompt = `Anda adalah instruktur kaderisasi dan pengatur agenda ahli untuk organisasi IPNU (Ikatan Pelajar Nahdlatul Ulama) dan IPPNU (Ikatan Pelajar Putri Nahdlatul Ulama) di Kabupaten Cirebon.
+Tugas Anda: Susunlah rundown / draf jadwal kegiatan resmi yang terstruktur, realistis, dan komprehensif untuk acara berikut:
+
+- Nama Kegiatan: ${namaKegiatan}
+- Tingkatan Pimpinan: ${tingkat} (PC/PAC/PR/PK)
+- Wilayah/Lembaga: ${wilayah}
+- Organisasi: ${organisasi} (IPNU / IPPNU / BERSAMA)
+- Tanggal Mulai: ${tanggalMulai || new Date().toISOString().slice(0, 10)}
+- Durasi: ${durasiHari} Hari
+- Lokasi: ${lokasi}
+- Sasaran Peserta: ${targetPeserta}
+- Catatan Tambahan: ${catatanKhusus || 'Sesuai Pedoman Kaderisasi PP IPNU-IPPNU'}
+
+Pedoman Penyusunan:
+1. Jika kegiatan adalah MAKESTA (Masa Kesetiaan Anggota): Wajib mencakup materi ke-Aswaja-an, ke-NU-an, ke-IPNU-an / ke-IPPNU-an, Kepemimpinan, Keorganisasian, Sholat Berjamaah, Tadarus, Pembaiatan/Inaugurasi, dan Rencana Tindak Lanjut (RTL).
+2. Jika kegiatan adalah LAKMUD (Latihan Kader Muda): Wajib mencakup materi Analisis Sosial (Ansos), Manajemen Konflik, Komunikasi Efektif, Scientific Problem Solving, Sidang Pleno, RTL.
+3. Jika kegiatan adalah KONFERENSI (Konfercab/Konferancab/Rapat Anggota): Wajib mencakup Sidang Tatib, Laporan Pertanggungjawaban (LPJ), Pandangan Umum, Sidang Komisi (A: Organisasi, B: Program Kerja, C: Rekomendasi), Pemilihan Ketua & Tim Formatur.
+4. Jika kegiatan adalah RAPAT KERJA / PELANTIKAN / HARLAH: Wajib mencakup Pembukaan (Lagu Indonesia Raya, Mars IPNU, Mars IPPNU, Subbanul Wathon), Sambutan-sambutan, Sesi Inti, Doa Penutup.
+5. Hitung tanggal untuk setiap hari (jika 2 atau 3 hari, sesuaikan tanggalMulai + hari ke-N).
+6. Tentukan waktu mulai (startTime, format HH:mm) dan selesai (endTime, format HH:mm).
+7. Tentukan kategori yang tepat: salah satu dari ['Kaderisasi', 'Rapat', 'PHBI', 'Konferensi', 'Umum'].
+
+Hasilkan respon HANYA dalam format JSON valid dengan schema berikut:
+{
+  "ringkasanAcara": "Deskripsi singkat tentang kegiatan ini",
+  "totalSesi": 8,
+  "items": [
+    {
+      "title": "Registrasi Peserta & Check-In",
+      "category": "Kaderisasi",
+      "date": "YYYY-MM-DD",
+      "startTime": "08:00",
+      "endTime": "09:00",
+      "location": "Lokasi spesifik",
+      "description": "Deskripsi sesi, narasumber, atau instruksi",
+      "organizer": "Panitia Pelaksana",
+      "targetParticipants": "Seluruh peserta terdaftar",
+      "status": "Akan Datang"
+    }
+  ]
+}`;
+
+      const client = getAIClient();
+      const response = await client.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        }
+      });
+
+      const responseText = response.text || '{}';
+      let parsedData;
+      try {
+        parsedData = JSON.parse(responseText);
+      } catch (e) {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        parsedData = jsonMatch ? JSON.parse(jsonMatch[0]) : { items: [] };
+      }
+
+      res.json(parsedData);
+    } catch (error: any) {
+      console.error('Server Generate Agenda Error:', error);
+      res.status(500).json({ error: error.message || 'Gagal menghasilkan draf agenda AI' });
     }
   });
 
@@ -775,7 +1005,8 @@ Panduan penulisan:
         3. Rekomendasi tindakan singkat.
       `;
 
-      const response = await ai.models.generateContent({
+      const client = getAIClient();
+      const response = await client.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
         config: {

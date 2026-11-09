@@ -30,15 +30,15 @@ export const AMALIAH_DATA = [
   {
     id: 'diba',
     title: "Kitab Maulid Ad-Diba'i",
-    description: "Kitab maulid lengkap karangan Imam Abdurrahman Ad-Diba'i beserta rawi, Mahalul Qiyam, dan Doa.",
-    source: 'Rujukan: Kitab Maulid Ad-Diba\'i Rasm Utsmani — Ditashih Kemenag RI',
+    description: "Kitab maulid lengkap karangan Imam Abdurrahman Ad-Diba'i: Qasidah Pembuka, 24 Fasal/Rawi, Mahalul Qiyam, dan Doa Penutup.",
+    source: 'Rujukan: Kitab Majmu\'ah al-Mawalid (Ad-Diba\'i & Al-Barzanji) — Pustaka Santri Baper',
     pages: DIBAI_PAGES
   },
   {
     id: 'barzanji',
     title: 'Kitab Maulid Al-Barzanji',
-    description: "Kitab maulid lengkap karangan Sayyid Ja'far Al-Barzanji beserta pembuka, rawi-rawi, dan doa penutup.",
-    source: 'Rujukan: Kitab Maulid Al-Barzanji Rasm Utsmani — Ditashih Kemenag RI',
+    description: "Kitab maulid lengkap karangan Sayyid Ja'far Al-Barzanji: Pembuka Ibtida'ul Imla', Rawi Nasab hingga Syamail, Mahalul Qiyam, dan Doa.",
+    source: 'Rujukan: Kitab Majmu\'ah al-Mawalid (Ad-Diba\'i & Al-Barzanji) — Pustaka Santri Baper',
     pages: BARZANJI_PAGES
   },
   {

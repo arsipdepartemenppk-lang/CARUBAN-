@@ -22,7 +22,7 @@ const Beasiswa: React.FC = () => {
   useEffect(() => {
     const q = query(collection(db, 'beasiswa'), orderBy('createdAt', 'desc'));
     const unsub = onSnapshot(q, (s) => setData(s.docs.map(d => ({ id: d.id, ...d.data() }))), (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'beasiswa', auth);
+      console.warn('Beasiswa snapshot sync notice:', error);
     });
     return () => unsub();
   }, []);

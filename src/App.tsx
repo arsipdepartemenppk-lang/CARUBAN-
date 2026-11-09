@@ -7,6 +7,7 @@ import { NotificationProvider } from './components/NotificationProvider';
 import { ToastProvider } from './components/Toast';
 import AppLayout from './components/Layout/AppLayout';
 import { AIWidget } from './components/AIWidget';
+import { ProtectedRoute } from './components/ProtectedRoute';
 
 // Lazy-loaded pages with retry
 const Beranda = lazyWithRetry(() => import('./pages/Beranda'));
@@ -78,18 +79,34 @@ export default function App() {
                     {/* Master PK */}
                     <Route path="/master-pk" element={<DataMasterPK />} />
                     <Route path="/pk" element={<DataMasterPK />} />
-                    <Route path="/pk-management" element={<AdminPKManagement />} />
+                    <Route path="/pk-management" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC']}>
+                        <AdminPKManagement />
+                      </ProtectedRoute>
+                    } />
 
                     {/* Visitasi & Monitoring */}
-                    <Route path="/visitasi" element={<DataVisitasi />} />
+                    <Route path="/visitasi" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC', 'PAC', 'PK']}>
+                        <DataVisitasi />
+                      </ProtectedRoute>
+                    } />
                     
                     {/* Maps & Geolocation */}
                     <Route path="/maps" element={<Maps />} />
                     <Route path="/peta" element={<Maps />} />
 
                     {/* Laporan & Analytics */}
-                    <Route path="/laporan" element={<Pelaporan />} />
-                    <Route path="/pelaporan" element={<Pelaporan />} />
+                    <Route path="/laporan" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC', 'PAC', 'PK']}>
+                        <Pelaporan />
+                      </ProtectedRoute>
+                    } />
+                    <Route path="/pelaporan" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC', 'PAC', 'PK']}>
+                        <Pelaporan />
+                      </ProtectedRoute>
+                    } />
 
                     {/* Layanan Keagamaan */}
                     <Route path="/alquran" element={<AlQuran />} />
@@ -121,10 +138,18 @@ export default function App() {
                     <Route path="/surat-keluar" element={<SuratKeluar />} />
 
                     {/* Modul CORE & Evaluasi */}
-                    <Route path="/core" element={<Core />} />
+                    <Route path="/core" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC', 'PAC', 'PK']}>
+                        <Core />
+                      </ProtectedRoute>
+                    } />
                     <Route path="/core-rules" element={<CoreRules />} />
                     <Route path="/leaderboard" element={<Leaderboard />} />
-                    <Route path="/database-pimpinan" element={<DatabasePimpinan />} />
+                    <Route path="/database-pimpinan" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer', 'PC', 'PAC', 'PK', 'PR', 'Pengurus']}>
+                        <DatabasePimpinan />
+                      </ProtectedRoute>
+                    } />
 
                     {/* Pengaturan & Profil */}
                     <Route path="/profile" element={<ProfilPengguna />} />
@@ -132,11 +157,27 @@ export default function App() {
                     <Route path="/pengaturan" element={<PengaturanUser />} />
                     <Route path="/panduan" element={<Panduan />} />
 
-                    {/* Admin Panel */}
-                    <Route path="/admin/users" element={<AdminUserManagement />} />
-                    <Route path="/admin/roles" element={<AdminUserManagement />} />
-                    <Route path="/admin/hak-akses" element={<AdminUserManagement />} />
-                    <Route path="/admin/pk" element={<AdminPKManagement />} />
+                    {/* Admin Panel - Strict Super Admin & Developer Only */}
+                    <Route path="/admin/users" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer']}>
+                        <AdminUserManagement />
+                      </ProtectedRoute>
+                    } />
+                    <Route path="/admin/roles" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer']}>
+                        <AdminUserManagement />
+                      </ProtectedRoute>
+                    } />
+                    <Route path="/admin/hak-akses" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer']}>
+                        <AdminUserManagement />
+                      </ProtectedRoute>
+                    } />
+                    <Route path="/admin/pk" element={
+                      <ProtectedRoute allowedRoles={['admin', 'developer']}>
+                        <AdminPKManagement />
+                      </ProtectedRoute>
+                    } />
                   </Route>
 
                   {/* Fallback Catch-all Route */}

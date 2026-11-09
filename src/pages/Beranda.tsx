@@ -419,19 +419,6 @@ export const Beranda: React.FC = () => {
               </h4>
               <p className="text-xs text-[var(--text-muted)] mt-1">Koleksi kitab, modul kaderisasi & tanya jawab AI</p>
             </Link>
-
-            <Link
-              to="/chat"
-              className="p-5 rounded-3xl bg-[var(--bg-card)] border border-[var(--border-main)] hover:border-indigo-500/50 transition-all group"
-            >
-              <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-                <Shield size={20} />
-              </div>
-              <h4 className="font-bold text-sm text-[var(--text-main)] group-hover:text-indigo-400 transition-colors">
-                Komunikasi Terenkripsi
-              </h4>
-              <p className="text-xs text-[var(--text-muted)] mt-1">Saluran pesan rahasia aman E2EE antar pimpinan</p>
-            </Link>
           </div>
         </div>
 

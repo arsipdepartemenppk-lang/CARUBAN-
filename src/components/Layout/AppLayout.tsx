@@ -5,8 +5,9 @@ import {
   Menu, X, Calendar, Book, MessageCircle, 
   GraduationCap, FileCheck, Database, ShieldCheck, LogOut, Settings,
   Compass, Search, Bell, Sun, Moon, Trophy, Activity, BookOpenText, BookOpen,
-  ChevronDown, LifeBuoy, Heart, QrCode, HardDrive, Image as ImageIcon, Sparkles
+  ChevronDown, LifeBuoy, Heart, QrCode, HardDrive, Image as ImageIcon, Sparkles, Download
 } from 'lucide-react';
+import { PWAInstallModal } from '../PWAInstallModal';
 import { useFirebase } from '../FirebaseProvider';
 import { useTheme } from '../ThemeProvider';
 import { auth, db } from '../../firebase';
@@ -21,6 +22,7 @@ import OnboardingTour from '../OnboardingTour';
 import { CORE_RULES_SECTIONS } from '../../constants/coreRules';
 import { NetworkSyncStatus } from '../NetworkSyncStatus';
 import { GlobalQRScannerModal } from '../GlobalQRScannerModal';
+import { PasswordRotationReminder } from '../PasswordRotationReminder';
 
 interface NavSubItem {
   name: string;
@@ -49,6 +51,7 @@ export default function AppLayout() {
   const [isSideNavOpen, setIsSideNavOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isGlobalQRScannerOpen, setIsGlobalQRScannerOpen] = useState(false);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -96,7 +99,7 @@ export default function AppLayout() {
         );
         setUnreadCount(filtered.length);
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'notifications', auth);
+        console.warn('Notifications snapshot sync notice (offline or connecting):', error?.message || error);
       });
       return () => unsub();
     }
@@ -595,8 +598,6 @@ export default function AppLayout() {
           </div>
 
           <div className="flex items-center gap-2">
-            <NetworkSyncStatus />
-
             <button
               onClick={() => setIsGlobalQRScannerOpen(true)}
               className="p-2.5 rounded-2xl border transition-all active:scale-90 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border-emerald-500/30 flex items-center gap-1.5"
@@ -604,16 +605,6 @@ export default function AppLayout() {
             >
               <QrCode size={18} />
               <span className="text-xs font-black hidden xl:inline">Scan QR</span>
-            </button>
-
-            <button
-              onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-              className={cn(
-                "p-2.5 rounded-2xl border transition-all active:scale-90 bg-[var(--bg-app)] text-[var(--text-muted)] border-[var(--border-main)]",
-              )}
-              title="Toggle Theme"
-            >
-              {resolvedTheme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             </button>
 
             <button 
@@ -649,6 +640,9 @@ export default function AppLayout() {
 
         {/* Notifications Modal */}
         <Notifications isOpen={isNotificationsOpen} onClose={() => setIsNotificationsOpen(false)} />
+
+        {/* PWA / APK Install Modal */}
+        <PWAInstallModal isOpen={isInstallModalOpen} onClose={() => setIsInstallModalOpen(false)} />
 
         {/* Mobile Navigation Drawer */}
         <AnimatePresence>
@@ -832,6 +826,8 @@ export default function AppLayout() {
                 </React.Fragment>
               ))}
             </nav>
+            
+            <PasswordRotationReminder />
 
             <AnimatePresence mode="wait">
               <motion.div
@@ -892,14 +888,6 @@ export default function AppLayout() {
           })}
         </nav>
       </div>
-      {/* Theme Toggle FAB */}
-      <button
-        onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-        className="fixed bottom-24 right-6 lg:bottom-10 lg:right-10 z-[60] w-14 h-14 rounded-full bg-[var(--bg-card)] border border-[var(--border-main)] shadow-2xl flex items-center justify-center text-[var(--accent-primary)] hover:scale-110 active:scale-95 transition-all group"
-      >
-        <div className="absolute inset-0 rounded-full bg-[var(--accent-primary)]/5 group-hover:bg-[var(--accent-primary)]/10 transition-colors" />
-        {resolvedTheme === 'dark' ? <Sun size={24} /> : <Moon size={24} />}
-      </button>
 
       {/* Global Quick QR Scanner Modal */}
       <GlobalQRScannerModal

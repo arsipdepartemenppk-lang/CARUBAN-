@@ -1,21 +1,24 @@
 {
-  "name": "Caruban Core Mobile",
+  "name": "Caruban Core - PC IPNU IPPNU Kab. Cirebon",
   "short_name": "CarubanCore",
-  "description": "Aplikasi manajemen organisasi futuristik PC IPNU Kabupaten Cirebon.",
+  "description": "Pusat komando digital resmi PC IPNU IPPNU Kabupaten Cirebon. Kelola keanggotaan, akreditasi komisariat, presensi berbasis biometrik wajah, dan pemetaan wilayah.",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#020617",
-  "theme_color": "#0ea5e9",
+  "theme_color": "#059669",
   "icons": [
     {
       "src": "https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "https://res.cloudinary.com/dxsbefd16/image/upload/q_auto/f_auto/v1775730419/Logo_CARUBAN_CORE_dengan_motif_Mega_Mendung-removebg-preview_gszxaq.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

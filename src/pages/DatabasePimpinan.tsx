@@ -1,14 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
+import { useSearchParams, Link } from 'react-router-dom';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
 import { useTheme } from '../components/ThemeProvider';
-import { Plus, Search, Trash2, Building2, Phone, MapPin, Calendar, Activity, Layers, Users, Mail } from 'lucide-react';
+import { useToast } from '../components/Toast';
+import { 
+  Plus, Search, Trash2, Building2, Phone, MapPin, Calendar, Activity, 
+  Layers, Users, Mail, RefreshCw, Sparkles, CheckCircle2, ArrowRight, X 
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { IPNU_ZONES, IPPNU_ZONES } from '../constants/zones';
 import { cn } from '../lib/utils';
 import { logActivity } from '../utils/activityLogger';
+import { encryptData, decryptData } from '../utils/securityEncryption';
+import { syncAllData, SyncReport } from '../services/dataSyncService';
 
 interface Pimpinan {
   id: string;
@@ -25,6 +31,9 @@ interface Pimpinan {
   kecamatan: string;
   zona: string;
   koorzon: string;
+  jumlahAnggota?: number;
+  pkDocId?: string;
+  pkId?: string;
 }
 
 const STATUS_OPTIONS = ['Aktif', 'Non Aktif', 'Vakum'];
@@ -32,15 +41,37 @@ const STATUS_OPTIONS = ['Aktif', 'Non Aktif', 'Vakum'];
 const DatabasePimpinan: React.FC = () => {
   const { user, role } = useFirebase();
   const { theme } = useTheme();
+  const { showToast } = useToast();
   const [searchParams] = useSearchParams();
   const isDark = theme === 'dark';
   const [pimpinan, setPimpinan] = useState<Pimpinan[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState(searchParams.get('pk') || '');
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  // Sync state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  const handleSyncData = async () => {
+    setIsSyncing(true);
+    showToast('Menyelaraskan data Pimpinan dengan Master PK dan Anggota...', 'info');
+    try {
+      const report = await syncAllData({ uid: user?.uid, email: user?.email || undefined });
+      setSyncReport(report);
+      setIsSyncModalOpen(true);
+      showToast(`Sinkronisasi selesai! ${report.totalMembers} kader & ${report.totalPKs} PK tersinkron.`, 'success');
+    } catch (err: any) {
+      console.error('Error synchronizing in DatabasePimpinan:', err);
+      showToast('Gagal melakukan sinkronisasi: ' + err.message, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const [formData, setFormData] = useState({
     namaLembaga: '',
-    jenis: 'PAC' as const,
+    jenis: 'PAC' as 'PAC' | 'PR' | 'PK',
     namaKetua: '',
     noHp: '',
     email: '',
@@ -55,15 +86,23 @@ const DatabasePimpinan: React.FC = () => {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'pimpinan'), orderBy('namaLembaga', 'asc'));
+    const q = query(collection(db, 'pimpinan'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Pimpinan[];
+      const data = snapshot.docs.map(doc => {
+        const raw = doc.data();
+        const item = { id: doc.id, ...raw } as any;
+        if (raw._isEncrypted) {
+          ['namaKetua', 'noHp', 'email', 'alamatDomisili', 'namaLembaga'].forEach(f => {
+            if (raw[f]) item[f] = decryptData(raw[f]);
+          });
+        }
+        return item;
+      }) as Pimpinan[];
+      // Client-side sort
+      data.sort((a, b) => (a.namaLembaga || '').localeCompare(b.namaLembaga || ''));
       setPimpinan(data);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'pimpinan', auth);
+      console.warn('Pimpinan snapshot sync notice:', error);
     });
     return () => unsubscribe();
   }, []);
@@ -123,12 +162,60 @@ const DatabasePimpinan: React.FC = () => {
     }
 
     try {
+      const pData = { ...formData } as any;
+
+      // If adding PK, also ensure it exists in Master PK (pks)
+      if (formData.jenis === 'PK') {
+        try {
+          const cleanNama = formData.namaLembaga.replace(/\s+/g, '').toUpperCase().slice(0, 10);
+          const cleanZona = (formData.zona || 'ZONA1').replace(/\s+/g, '').toUpperCase();
+          const generatedPkId = `${cleanNama}_${cleanZona}_${Math.floor(100 + Math.random() * 900)}`;
+
+          const pkRef = await addDoc(collection(db, 'pks'), {
+            pkId: generatedPkId,
+            namaPK: formData.namaLembaga,
+            alamat: formData.alamatDomisili || '',
+            zona: formData.zona || 'Zona 1',
+            koorzon: formData.koorzon || '',
+            status: formData.statusPimpinan || 'Aktif',
+            organisasi: formData.organisasi || 'IPNU',
+            kecamatan: formData.kecamatan || '',
+            namaKetua: formData.namaKetua || '',
+            noHp: formData.noHp || '',
+            emailKomisariat: formData.email || '',
+            tanggalBerdiri: '2024-01-01',
+            jumlahAnggota: 0,
+            statusVisitasi: 'Unvisited',
+            priority: 'Medium',
+            taskType: 'Regular Visit',
+            lat: -6.7372,
+            lng: 108.5507,
+            createdAt: new Date().toISOString(),
+            createdBy: user?.uid
+          });
+
+          pData.pkDocId = pkRef.id;
+          pData.pkId = generatedPkId;
+        } catch (pkErr) {
+          console.warn('Sync PK creation notice:', pkErr);
+        }
+      }
+
+      ['namaKetua', 'noHp', 'email', 'alamatDomisili', 'namaLembaga'].forEach(f => {
+        if (pData[f]) {
+          const { encrypted } = encryptData(pData[f]);
+          pData[f] = encrypted;
+        }
+      });
+      pData._isEncrypted = true;
+
       const docRef = await addDoc(collection(db, 'pimpinan'), {
-        ...formData,
+        ...pData,
         createdAt: new Date().toISOString(),
         createdBy: user?.uid
       });
       await logActivity(user?.uid, user?.email, 'CREATE_PIMPINAN', 'Pimpinan', docRef.id, { namaLembaga: formData.namaLembaga, jenis: formData.jenis });
+      showToast(`Pimpinan ${formData.namaLembaga} (${formData.jenis}) berhasil ditambahkan dan disinkronkan`, 'success');
       setIsModalOpen(false);
       setFormData({
         namaLembaga: '',
@@ -157,7 +244,15 @@ const DatabasePimpinan: React.FC = () => {
       const pimpinanToDelete = pimpinan.find(p => p.id === id);
       try {
         await deleteDoc(doc(db, 'pimpinan', id));
+        if (pimpinanToDelete?.jenis === 'PK' && pimpinanToDelete.pkDocId) {
+          try {
+            await deleteDoc(doc(db, 'pks', pimpinanToDelete.pkDocId));
+          } catch (pkErr) {
+            console.warn('Sync delete PK notice:', pkErr);
+          }
+        }
         await logActivity(user?.uid, user?.email, 'DELETE_PIMPINAN', 'Pimpinan', id, { namaLembaga: pimpinanToDelete?.namaLembaga });
+        showToast('Data pimpinan berhasil dihapus', 'success');
       } catch (error) {
         console.error('Error deleting pimpinan:', error);
         handleFirestoreError(error, OperationType.DELETE, `pimpinan/${id}`, auth);
@@ -174,19 +269,36 @@ const DatabasePimpinan: React.FC = () => {
     <div className={cn(
       "p-4 pb-24 min-h-screen font-sans transition-colors duration-500 bg-[var(--bg-app)] text-[var(--text-main)]",
     )}>
-      <div className="flex justify-between items-center mb-8 pt-12">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pt-12">
         <div>
-          <h1 className="text-3xl font-black tracking-tighter uppercase">Database Pimpinan</h1>
-          <p className="text-zinc-500 text-sm font-bold uppercase tracking-widest">PAC, PR, PK</p>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+              <Sparkles size={11} /> Caruban CORE Pimpinan
+            </span>
+          </div>
+          <h1 className="text-3xl font-black tracking-tighter uppercase text-[var(--text-main)]">Database Pimpinan</h1>
+          <p className="text-zinc-500 text-sm font-bold uppercase tracking-widest">PAC (Kecamatan), PR (Desa), PK (Komisariat)</p>
         </div>
-        {(role === 'admin') && (
+        <div className="flex flex-wrap items-center gap-3">
           <button
-            onClick={() => setIsModalOpen(true)}
-            className="w-14 h-14 bg-[var(--accent-primary)] rounded-2xl shadow-lg shadow-[var(--accent-primary)]/20 active:scale-95 transition-all flex items-center justify-center text-white"
+            onClick={handleSyncData}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-teal-600/20 active:scale-95 transition-all disabled:opacity-50"
+            title="Sinkronkan basis data Anggota, Master PK, dan Database Pimpinan"
           >
-            <Plus size={28} />
+            <RefreshCw size={16} className={cn("text-white", isSyncing && "animate-spin")} />
+            <span>{isSyncing ? 'Menyingkronkan...' : 'Sinkronkan Basis Data'}</span>
           </button>
-        )}
+
+          {(role === 'admin' || role === 'PC' || role === 'developer') && (
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="px-5 py-3 bg-[var(--accent-primary)] rounded-2xl shadow-lg shadow-[var(--accent-primary)]/20 active:scale-95 transition-all flex items-center gap-2 text-white font-bold text-xs"
+            >
+              <Plus size={18} /> Tambah Pimpinan
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="relative mb-8">
@@ -281,17 +393,39 @@ const DatabasePimpinan: React.FC = () => {
             </div>
 
             <div className={cn(
-              "pt-6 border-t flex justify-between items-center transition-colors",
+              "pt-6 border-t flex flex-wrap justify-between items-center gap-3 transition-colors",
               isDark ? "border-zinc-800" : "border-zinc-200"
             )}>
-              <div className="flex items-center gap-3">
-                <Activity size={16} className="text-zinc-500" />
+              <div className="flex items-center gap-2.5">
+                <Activity size={15} className="text-zinc-500" />
                 <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
                   p.statusPimpinan === 'Aktif' ? 'text-[var(--accent-primary)]' : 
                   p.statusPimpinan === 'Vakum' ? 'text-rose-500' : 'text-zinc-500'
                 }`}>
                   {p.statusPimpinan}
                 </span>
+                <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  {p.jumlahAnggota || 0} Kader
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Link
+                  to={`/members?search=${encodeURIComponent(p.namaLembaga)}`}
+                  className="text-[10px] text-zinc-400 hover:text-emerald-400 flex items-center gap-1 font-bold hover:underline"
+                  title="Lihat anggota terdaftar"
+                >
+                  <Users size={12} className="text-emerald-500" /> Anggota
+                </Link>
+                {p.jenis === 'PK' && (
+                  <Link
+                    to={`/master-pk?search=${encodeURIComponent(p.namaLembaga)}`}
+                    className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1 font-bold hover:underline bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20"
+                    title="Buka data di Master PK"
+                  >
+                    Master PK <ArrowRight size={10} />
+                  </Link>
+                )}
               </div>
             </div>
           </motion.div>

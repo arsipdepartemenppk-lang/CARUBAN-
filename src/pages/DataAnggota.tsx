@@ -27,6 +27,7 @@ import { where, getDocs, limit as firestoreLimit } from 'firebase/firestore';
 import { generateAutomaticNIA } from '../utils/niaGenerator';
 import { handleFirestoreError, OperationType } from '../utils/firebaseUtils';
 import { auth } from '../firebase';
+import { encryptData, decryptData } from '../utils/securityEncryption';
 
 export interface Member {
   id: string;
@@ -79,6 +80,31 @@ const INITIAL_FORM_DATA = {
   lat: -6.7372,
   lng: 108.5507,
   statusKeanggotaan: 'Aktif'
+};
+
+const PI_FIELDS = ['namaLengkap', 'noHp', 'email', 'alamatLengkap', 'alamatSekolah', 'tempatKaderisasi', 'tanggalLahir'];
+
+const encryptMemberData = (data: any) => {
+  const encrypted = { ...data };
+  PI_FIELDS.forEach(field => {
+    if (data[field]) {
+      const { encrypted: cipher } = encryptData(data[field]);
+      encrypted[field] = cipher;
+    }
+  });
+  encrypted._isEncrypted = true;
+  return encrypted;
+};
+
+const decryptMemberData = (data: any) => {
+  if (!data._isEncrypted) return data;
+  const decrypted = { ...data };
+  PI_FIELDS.forEach(field => {
+    if (data[field]) {
+      decrypted[field] = decryptData(data[field]);
+    }
+  });
+  return decrypted;
 };
 
 export const DataAnggota: React.FC = () => {
@@ -176,10 +202,12 @@ export const DataAnggota: React.FC = () => {
       }
     };
 
-    const q = query(collection(db, 'members'), orderBy('namaLengkap', 'asc'));
+    const q = query(collection(db, 'members'));
     const unsub = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
-        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Member));
+        const data = snapshot.docs.map(d => decryptMemberData({ id: d.id, ...d.data() }) as Member);
+        // Sort client-side because names are encrypted in Firestore
+        data.sort((a, b) => (a.namaLengkap || '').localeCompare(b.namaLengkap || ''));
         setMembers(data);
         cacheCriticalMemberData(data).then(() => {
           setOfflineCacheCount(data.length);
@@ -262,20 +290,20 @@ export const DataAnggota: React.FC = () => {
       };
 
       if (editingId) {
-        await updateDoc(doc(db, 'members', editingId), {
+        await updateDoc(doc(db, 'members', editingId), encryptMemberData({
           ...cleanedData,
           updatedAt: new Date().toISOString(),
           updatedBy: user?.uid || 'system'
-        });
-        showToast('Data anggota berhasil diperbarui', 'success');
+        }));
+        showToast('Data anggota berhasil diperbarui (AES-256 Secured)', 'success');
         logActivity(user?.uid, user?.email, 'UPDATE_MEMBER', 'members', editingId, { nama: formData.namaLengkap });
       } else {
-        const docRef = await addDoc(collection(db, 'members'), {
+        const docRef = await addDoc(collection(db, 'members'), encryptMemberData({
           ...cleanedData,
           createdAt: new Date().toISOString(),
           createdBy: user?.uid || 'system'
-        });
-        showToast('Anggota baru berhasil ditambahkan dengan NIA ' + (cleanedData.nomorIndukAnggota || ''), 'success');
+        }));
+        showToast('Anggota baru berhasil ditambahkan dengan NIA ' + (cleanedData.nomorIndukAnggota || '') + ' (AES-256 Secured)', 'success');
         logActivity(user?.uid, user?.email, 'ADD_MEMBER', 'members', docRef.id, { nama: formData.namaLengkap });
       }
       setIsFormOpen(false);
@@ -316,7 +344,7 @@ export const DataAnggota: React.FC = () => {
           });
           currentNias.push(memberNia);
 
-          await addDoc(collection(db, 'members'), {
+          await addDoc(collection(db, 'members'), encryptMemberData({
             namaLengkap: item.namaLengkap || item.Nama || 'Anggota',
             nomorIndukAnggota: memberNia,
             noHp: item.noHp || item.Telepon || item.HP || '',
@@ -334,7 +362,7 @@ export const DataAnggota: React.FC = () => {
             lng: item.lng || 108.5507,
             statusKeanggotaan: 'Aktif',
             createdAt: new Date().toISOString()
-          });
+          }));
           count++;
         }
       }

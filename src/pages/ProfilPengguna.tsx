@@ -7,7 +7,7 @@ import { useToast } from '../components/Toast';
 import { 
   Camera, Save, Loader2, Info, MessageSquare, LifeBuoy, ChevronRight, 
   LogOut, QrCode, Download, Copy, Check, ShieldCheck, Sparkles, 
-  Maximize2, CheckCircle2, Shield, Fingerprint, RefreshCw 
+  Maximize2, CheckCircle2, Shield, Fingerprint, RefreshCw, Sun, Moon, Monitor, Wifi, Smartphone 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useTheme } from '../components/ThemeProvider';
@@ -19,6 +19,8 @@ import { isBiometricAvailable, registerBiometric } from '../utils/biometricUtils
 import { ContributionCalendar } from '../components/ContributionCalendar';
 import { DigitalMemberCard } from '../components/DigitalMemberCard';
 import { MemberQRModal } from '../components/MemberQRModal';
+import { NetworkSyncStatus } from '../components/NetworkSyncStatus';
+import { PWAInstallModal } from '../components/PWAInstallModal';
 
 export default function ProfilPengguna() {
   const { user, userData, loading: firebaseLoading } = useFirebase();
@@ -30,6 +32,7 @@ export default function ProfilPengguna() {
   const [showAbout, setShowAbout] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isPWAInstallOpen, setIsPWAInstallOpen] = useState(false);
   const [memberData, setMemberData] = useState<any>(null);
   const [formData, setFormData] = useState({
     displayName: '',
@@ -352,22 +355,81 @@ export default function ProfilPengguna() {
           </div>
         </div>
 
-        <div className="pt-4">
-          <label className="text-xs font-bold text-[var(--text-muted)] uppercase">Tema Aplikasi</label>
-          <div className="flex gap-2 mt-2">
-            {(['light', 'dark', 'system'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTheme(t)}
-                className={cn(
-                  "px-4 py-2 rounded-xl text-sm font-bold capitalize transition-all",
-                  theme === t ? "bg-emerald-600 text-white" : "bg-[var(--bg-app)] text-[var(--text-muted)] hover:bg-[var(--bg-card)] border border-[var(--border-main)]"
-                )}
-              >
-                {t}
-              </button>
-            ))}
+        {/* Sistem & Aplikasi: Tersinkronisasi, Download APK, Toggle Theme */}
+        <div className="pt-4 border-t border-[var(--border-main)] space-y-4">
+          <label className="text-xs font-bold text-[var(--text-muted)] uppercase flex items-center gap-2">
+            <Smartphone size={14} className="text-emerald-500" /> Sistem, Aplikasi & Tampilan
+          </label>
+
+          {/* Status Tersinkronisasi / Sync Queue */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-main)] gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-emerald-500/10 text-emerald-500 rounded-xl shrink-0">
+                <Wifi size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-[var(--text-main)]">Status Sinkronisasi Real-Time</p>
+                <p className="text-[10px] text-zinc-500 font-medium">Data tersimpan lokal & terhubung otomatis ke Cloud</p>
+              </div>
+            </div>
+            <NetworkSyncStatus />
+          </div>
+
+          {/* Download APK / Pasang PWA */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-main)] gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-emerald-500/10 text-emerald-500 rounded-xl shrink-0">
+                <Download size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-[var(--text-main)]">Download APK / Pasang Aplikasi</p>
+                <p className="text-[10px] text-zinc-500 font-medium">Instal Caruban CORE sebagai aplikasi Android / PWA</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsPWAInstallOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 shrink-0"
+            >
+              <Download size={14} />
+              <span>Download APK</span>
+            </button>
+          </div>
+
+          {/* Pengaturan Tema Tampilan (Light, Dark, System) */}
+          <div className="p-4 bg-[var(--bg-app)] rounded-2xl border border-[var(--border-main)] space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-[var(--text-main)]">Pilihan Tema Tampilan</p>
+              <span className="text-[10px] font-black uppercase text-emerald-500 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                Mode {theme === 'dark' ? 'Gelap' : theme === 'light' ? 'Terang' : 'Sistem'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              {[
+                { id: 'light', label: 'Terang', icon: Sun },
+                { id: 'dark', label: 'Gelap', icon: Moon },
+                { id: 'system', label: 'Sistem', icon: Monitor }
+              ].map((t) => {
+                const IconComp = t.icon;
+                const active = theme === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTheme(t.id as any)}
+                    className={cn(
+                      "py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border",
+                      active 
+                        ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/20" 
+                        : "bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-white border-[var(--border-main)]"
+                    )}
+                  >
+                    <IconComp size={15} />
+                    <span>{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -550,6 +612,12 @@ export default function ProfilPengguna() {
           statusPimpinan: effectivePimpinan,
           foto: user.photoURL || undefined
         }}
+      />
+
+      {/* PWA / APK Install Modal */}
+      <PWAInstallModal
+        isOpen={isPWAInstallOpen}
+        onClose={() => setIsPWAInstallOpen(false)}
       />
     </div>
   );

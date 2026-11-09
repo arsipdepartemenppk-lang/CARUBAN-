@@ -62,20 +62,20 @@ const Pelaporan: React.FC = () => {
           });
         });
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, stat.coll, auth);
+        console.warn(`Pelaporan ${stat.coll} sync notice:`, error);
       });
     });
 
     const unsubPks = onSnapshot(collection(db, 'pks'), (snapshot) => {
       setPks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'pks', auth);
+      console.warn('Pelaporan pks sync notice:', error);
     });
     
     const unsubVisitasis = onSnapshot(collection(db, 'visitasis'), (snapshot) => {
       setVisitasis(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'visitasis', auth);
+      console.warn('Pelaporan visitasis sync notice:', error);
     });
 
     return () => {

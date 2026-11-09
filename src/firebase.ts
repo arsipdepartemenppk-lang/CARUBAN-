@@ -1,20 +1,33 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager,
+  setLogLevel 
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with offline persistence
+// Silence verbose connection delay / offline mode logs from the Firestore SDK
+try {
+  setLogLevel('silent');
+} catch {
+  // Ignore
+}
+
+// Initialize Firestore with robust multi-tab offline cache and auto-detect long-polling
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager()
-  })
+  }),
+  experimentalAutoDetectLongPolling: true,
 }, (firebaseConfig as any).firestoreDatabaseId);
 
-export const auth = getAuth();
+export const auth = getAuth(app);
 export const storage = getStorage(app, firebaseConfig.storageBucket);
 export const messaging = typeof window !== 'undefined' ? getMessaging(app) : null;
 

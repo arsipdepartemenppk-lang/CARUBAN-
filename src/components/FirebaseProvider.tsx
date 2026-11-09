@@ -35,27 +35,24 @@ export const FirebaseProvider = ({ children }: { children: React.ReactNode }) =>
       }
 
       if (user) {
-        const checkIsAdmin = (uEmail?: string | null, uDisplayName?: string | null) => {
-          if (!uEmail && !uDisplayName) return false;
-          const email = (uEmail || '').toLowerCase();
-          const name = (uDisplayName || '').toLowerCase();
+        const checkIsAdmin = (uEmail?: string | null) => {
+          if (!uEmail) return false;
+          const email = uEmail.toLowerCase().trim();
           return (
             email === 'arsipdepartemenppk@gmail.com' ||
             email === 'arsipdepartemenpendidikan@gmail.com' ||
-            email === 'syifaudina15@gmail.com' ||
-            email.includes('syifaudin') ||
-            name.includes('syifaudin')
+            email === 'syifaudina15@gmail.com'
           );
         };
 
-        const isUserAdmin = checkIsAdmin(user.email, user.displayName);
+        const isUserAdmin = checkIsAdmin(user.email);
         const userDocRef = doc(db, 'users', user.uid);
 
         unsubUser = onSnapshot(userDocRef, (snapshot) => {
           console.log('User doc snapshot received:', snapshot.exists() ? 'Exists' : 'Not found');
           if (snapshot.exists()) {
             const data = snapshot.data();
-            const isAdminByData = isUserAdmin || checkIsAdmin(data.email, data.displayName);
+            const isAdminByData = isUserAdmin || checkIsAdmin(data.email);
             const finalRole = (isAdminByData ? 'admin' : (data.role || 'user')) as Role;
             
             // Sync admin role back to document if needed
@@ -87,13 +84,15 @@ export const FirebaseProvider = ({ children }: { children: React.ReactNode }) =>
           }
           setLoading(false);
         }, (error) => {
-          console.error('Failed to fetch user data:', error);
+          console.warn('User doc snapshot sync notice (offline or connecting):', error?.message || error);
           if (isUserAdmin) {
             setRole('admin');
             setUserData({ role: 'admin', displayName: user.displayName || 'Ahmad Syifaudin', poinSkill: 100 });
+          } else {
+            // Keep existing state or mark loading complete for offline use
+            setRole((prev) => prev || (user.isAnonymous ? 'user' : null));
           }
           setLoading(false);
-          handleFirestoreError(error, OperationType.GET, `users/${user.uid}`, auth);
         });
       } else {
         setRole(null);

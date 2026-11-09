@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Calendar as CalendarIcon, Plus, Search, MapPin, Clock, 
-  Trash2, Edit2, Users, CheckCircle, X, ChevronLeft, ChevronRight, Share2, QrCode, Bell, BellOff, ExternalLink
+  Trash2, Edit2, Users, CheckCircle, X, ChevronLeft, ChevronRight, Share2, QrCode, 
+  Bell, BellOff, ExternalLink, Sparkles, Download, Wand2, FileDown, Check
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
@@ -29,6 +30,64 @@ export interface AgendaItem {
   status: 'Akan Datang' | 'Berlangsung' | 'Selesai';
   createdAt?: string;
 }
+
+export const createGoogleCalendarUrl = (item: AgendaItem) => {
+  const title = encodeURIComponent(item.title);
+  const details = encodeURIComponent(
+    `${item.description || 'Agenda Resmi IPNU-IPPNU'}\n\nKategori: ${item.category}\nPenyelenggara: ${item.organizer}\nLokasi: ${item.location}\nPresensi: ${window.location.origin}/presensi/public/${item.id}`
+  );
+  const loc = encodeURIComponent(item.location);
+
+  const dateClean = (item.date || new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+  const startParts = (item.startTime || item.time?.split(' - ')[0] || '08:00').replace(':', '').trim();
+  const endParts = (item.endTime || item.time?.split(' - ')[1] || '10:00').replace(':', '').trim();
+
+  const startStr = `${dateClean}T${startParts.padEnd(4, '0')}00`;
+  const endStr = `${dateClean}T${endParts.padEnd(4, '0')}00`;
+
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startStr}/${endStr}&details=${details}&location=${loc}`;
+};
+
+export const downloadCalendarIcs = (items: AgendaItem[], filename = 'agenda_ipnu_ippnu.ics') => {
+  if (items.length === 0) return;
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Caruban CORE//IPNU IPPNU Kabupaten Cirebon//ID',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH'
+  ];
+
+  items.forEach((item, index) => {
+    const dateClean = (item.date || new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+    const startParts = (item.startTime || item.time?.split(' - ')[0] || '08:00').replace(':', '').trim();
+    const endParts = (item.endTime || item.time?.split(' - ')[1] || '10:00').replace(':', '').trim();
+    const startStr = `${dateClean}T${startParts.padEnd(4, '0')}00`;
+    const endStr = `${dateClean}T${endParts.padEnd(4, '0')}00`;
+    const uid = `${item.id || index}-${Date.now()}@carubancore.or.id`;
+
+    lines.push('BEGIN:VEVENT');
+    lines.push(`UID:${uid}`);
+    lines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
+    lines.push(`DTSTART:${startStr}`);
+    lines.push(`DTEND:${endStr}`);
+    lines.push(`SUMMARY:${item.title.replace(/\n/g, ' ')}`);
+    lines.push(`DESCRIPTION:${(item.description || 'Agenda Resmi IPNU-IPPNU').replace(/\n/g, '\\n')}`);
+    lines.push(`LOCATION:${item.location.replace(/\n/g, ' ')}`);
+    lines.push(`STATUS:CONFIRMED`);
+    lines.push('END:VEVENT');
+  });
+
+  lines.push('END:VCALENDAR');
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = window.URL.createObjectURL(blob);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
 
 export const Agenda: React.FC = () => {
   const { user, role, userData } = useFirebase();
@@ -191,6 +250,171 @@ export const Agenda: React.FC = () => {
     }
   };
 
+  // AI Agenda Automation States
+  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
+  const [isAIGenerating, setIsAIGenerating] = useState(false);
+  const [aiForm, setAiForm] = useState({
+    templatePreset: 'MAKESTA',
+    namaKegiatan: 'Masa Kesetiaan Anggota (MAKESTA)',
+    tingkat: 'PAC' as 'PC' | 'PAC' | 'PR' | 'PK',
+    wilayah: 'Kecamatan Palimanan',
+    organisasi: 'BERSAMA' as 'IPNU' | 'IPPNU' | 'BERSAMA',
+    tanggalMulai: new Date().toISOString().slice(0, 10),
+    durasiHari: 2,
+    lokasi: 'Gedung MWC NU Palimanan',
+    targetPeserta: 'Calon Anggota Pelajar & Santri',
+    catatanKhusus: 'Mencakup materi Ke-Aswaja-an, Ke-NU-an, Ke-IPNU-IPPNU-an, Pembaiatan, dan RTL'
+  });
+  const [aiGeneratedSchedule, setAiGeneratedSchedule] = useState<{
+    ringkasanAcara?: string;
+    totalSesi?: number;
+    items: any[];
+  } | null>(null);
+
+  const applyAIPreset = (preset: string) => {
+    if (preset === 'MAKESTA') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'MAKESTA',
+        namaKegiatan: 'Masa Kesetiaan Anggota (MAKESTA)',
+        durasiHari: 2,
+        lokasi: 'Gedung MWC NU / Madrasah',
+        targetPeserta: 'Calon Anggota Pelajar & Santri',
+        catatanKhusus: 'Wajib mencakup Ke-Aswaja-an, Ke-NU-an, Ke-IPNU-IPPNU-an, Kepemimpinan, Sholat Berjamaah, Pembaiatan, dan RTL'
+      }));
+    } else if (preset === 'LAKMUD') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'LAKMUD',
+        namaKegiatan: 'Latihan Kader Muda (LAKMUD)',
+        durasiHari: 3,
+        lokasi: 'Pondok Pesantren / Balai Diklat',
+        targetPeserta: 'Alumni Makesta yang aktif',
+        catatanKhusus: 'Materi Analisis Sosial (Ansos), Manajemen Konflik, Komunikasi Efektif, Scientific Problem Solving, Sidang Pleno, RTL'
+      }));
+    } else if (preset === 'DIKLATAMA') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'DIKLATAMA',
+        namaKegiatan: 'Pendidikan dan Pelatihan Pertama (DIKLATAMA CBP-KPP)',
+        durasiHari: 3,
+        lokasi: 'Bumi Perkemahan / Lapangan Terbuka',
+        targetPeserta: 'Anggota CBP & KPP',
+        catatanKhusus: 'Materi Kepanduan, SAR Dasar, Kedisiplinan PBB, Survival, Pengamanan Acara, Baiat Komando'
+      }));
+    } else if (preset === 'KONFERANCAB') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'KONFERANCAB',
+        namaKegiatan: 'Konferensi Anak Cabang (KONFERANCAB)',
+        durasiHari: 1,
+        lokasi: 'Aula Kecamatan / MWC NU',
+        targetPeserta: 'Delegasi Resmi PR & PK se-Kecamatan',
+        catatanKhusus: 'Sidang Tatib, Laporan Pertanggungjawaban (LPJ), Sidang Komisi Organisasi, Pemilihan Ketua IPNU & IPPNU'
+      }));
+    } else if (preset === 'RAKER') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'RAKER',
+        namaKegiatan: 'Rapat Kerja Pengurus (RAKER)',
+        durasiHari: 1,
+        lokasi: 'Sekretariat Pimpinan',
+        targetPeserta: 'Seluruh Pengurus Harian & Departemen',
+        catatanKhusus: 'Penyusunan Program Kerja Tahunan, Anggaran, Kalender Kegiatan, dan Target Capaian'
+      }));
+    } else if (preset === 'PELANTIKAN') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'PELANTIKAN',
+        namaKegiatan: 'Pelantikan & Upgrading Pengurus',
+        durasiHari: 1,
+        lokasi: 'Gedung Serbaguna',
+        targetPeserta: 'Pengurus Terpilih, Banom NU & Tamu Undangan',
+        catatanKhusus: 'Prosesi Baiat Pelantikan, Sambutan-sambutan, Materi Upgrading Tata Kelola Organisasi'
+      }));
+    } else if (preset === 'HARLAH') {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'HARLAH',
+        namaKegiatan: 'Peringatan Harlah IPNU-IPPNU & Cirebon Bersholawat',
+        durasiHari: 1,
+        lokasi: 'Halaman Gedung PCNU / Masjid Agung',
+        targetPeserta: 'Kader, Alumni, dan Masyarakat Umum',
+        catatanKhusus: 'Khatmil Quran, Istighotsah, Santunan Yatim, Tausiyah Kebangsaan, Mahalul Qiyam'
+      }));
+    } else {
+      setAiForm(prev => ({
+        ...prev,
+        templatePreset: 'CUSTOM'
+      }));
+    }
+  };
+
+  const handleGenerateAISchedule = async () => {
+    if (!aiForm.namaKegiatan.trim()) {
+      showToast('Nama kegiatan wajib diisi', 'error');
+      return;
+    }
+
+    setIsAIGenerating(true);
+    try {
+      const res = await fetch('/api/gemini/generate-agenda', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(aiForm)
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server returned status ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (!data.items || data.items.length === 0) {
+        throw new Error('Draf jadwal tidak berhasil dihasilkan');
+      }
+
+      setAiGeneratedSchedule(data);
+      showToast(`Berhasil menyusun draf jadwal (${data.items.length} sesi kegiatan)`, 'success');
+    } catch (err: any) {
+      console.error('Error generate AI schedule:', err);
+      showToast('Gagal menghasilkan jadwal AI: ' + err.message, 'error');
+    } finally {
+      setIsAIGenerating(false);
+    }
+  };
+
+  const handleSaveAllAIToAgenda = async () => {
+    if (!aiGeneratedSchedule?.items || aiGeneratedSchedule.items.length === 0) return;
+
+    try {
+      let savedCount = 0;
+      for (const item of aiGeneratedSchedule.items) {
+        await addDoc(collection(db, 'agendas'), {
+          title: item.title,
+          category: item.category || 'Kaderisasi',
+          date: item.date,
+          startTime: item.startTime || '08:00',
+          endTime: item.endTime || '10:00',
+          time: `${item.startTime || '08:00'} - ${item.endTime || '10:00'}`,
+          location: item.location || aiForm.lokasi,
+          description: item.description || '',
+          organizer: item.organizer || `${aiForm.tingkat} ${aiForm.organisasi} ${aiForm.wilayah}`,
+          targetParticipants: item.targetParticipants || aiForm.targetPeserta,
+          status: 'Akan Datang',
+          createdAt: new Date().toISOString(),
+          createdBy: user?.uid || 'ai-system'
+        });
+        savedCount++;
+      }
+
+      showToast(`Sukses! ${savedCount} sesi agenda kegiatan telah tersimpan ke sistem`, 'success');
+      setIsAIModalOpen(false);
+      setAiGeneratedSchedule(null);
+    } catch (err: any) {
+      showToast('Gagal menyimpan sebagian agenda: ' + err.message, 'error');
+    }
+  };
+
   const filteredAgendas = agendas.filter(a => {
     const matchSearch = a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                         a.location.toLowerCase().includes(searchTerm.toLowerCase());
@@ -217,27 +441,54 @@ export const Agenda: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setEditingId(null);
-            setFormData({
-              title: '',
-              category: 'Rapat',
-              date: new Date().toISOString().slice(0, 10),
-              startTime: '19:30',
-              endTime: '22:00',
-              location: 'Gedung PCNU Kab. Cirebon',
-              description: '',
-              organizer: 'PC IPNU Kab. Cirebon',
-              targetParticipants: 'Pengurus Harian & Lembaga',
-              status: 'Akan Datang'
-            });
-            setIsModalOpen(true);
-          }}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-lg shadow-orange-600/20 active:scale-95 transition-all"
-        >
-          <Plus size={16} /> Tambah Agenda
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              applyAIPreset('MAKESTA');
+              setIsAIModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold text-xs shadow-lg shadow-orange-950/40 active:scale-95 transition-all"
+          >
+            <Sparkles size={16} className="text-yellow-200 animate-pulse" />
+            <span>Draf AI Jadwal Kegiatan</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              downloadCalendarIcs(filteredAgendas, `agenda_ipnu_ippnu_cirebon_${new Date().toISOString().slice(0, 10)}.ics`);
+              showToast(`File kalender .ics (${filteredAgendas.length} agenda) berhasil diunduh`, 'success');
+            }}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-main)] hover:border-orange-500/50 text-[var(--text-main)] font-bold text-xs shadow-sm transition-all"
+            title="Ekspor seluruh agenda ke file .ics untuk kalender Google / Outlook"
+          >
+            <CalendarIcon size={15} className="text-orange-400" />
+            <span>Ekspor Kalender (.ics)</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setEditingId(null);
+              setFormData({
+                title: '',
+                category: 'Rapat',
+                date: new Date().toISOString().slice(0, 10),
+                startTime: '19:30',
+                endTime: '22:00',
+                location: 'Gedung PCNU Kab. Cirebon',
+                description: '',
+                organizer: 'PC IPNU Kab. Cirebon',
+                targetParticipants: 'Pengurus Harian & Lembaga',
+                status: 'Akan Datang'
+              });
+              setIsModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-lg shadow-orange-600/20 active:scale-95 transition-all"
+          >
+            <Plus size={16} /> Tambah Manual
+          </button>
+        </div>
       </div>
 
       {/* Filter and Category Pills */}
@@ -329,57 +580,29 @@ export const Agenda: React.FC = () => {
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-[var(--border-main)]">
-                <button
-                  onClick={() => {
-                    if (!user) return;
-                    showToast('Menghubungkan ke Google Calendar...', 'info');
-                    fetch(`/api/auth/google/url?uid=${user.uid}`)
-                      .then(res => res.json())
-                      .then(data => {
-                        if (data.url) {
-                          const width = 600, height = 700;
-                          const left = window.innerWidth / 2 - width / 2;
-                          const top = window.innerHeight / 2 - height / 2;
-                          window.open(data.url, 'googleAuth', `width=${width},height=${height},left=${left},top=${top}`);
-                        }
-                      });
-
-                    const handleSync = () => {
-                      fetch('/api/calendar/sync', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          uid: user.uid,
-                          event: {
-                            title: item.title,
-                            description: item.description || 'Agenda Organisasi',
-                            date: `${item.date}T${item.startTime || item.time.split(' - ')[0] || '19:30'}:00`
-                          }
-                        })
-                      }).then(res => res.json()).then(resData => {
-                        if (resData.success) {
-                          showToast('Agenda berhasil diekspor ke Google Calendar', 'success');
-                        } else {
-                          showToast('Gagal ekspor: Hubungkan kalender di Pengaturan', 'error');
-                        }
-                      }).catch(() => showToast('Gagal ekspor ke kalender', 'error'));
-                    };
-
-                    const messageListener = (event: MessageEvent) => {
-                      if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
-                        handleSync();
-                        window.removeEventListener('message', messageListener);
-                      }
-                    };
-                    window.addEventListener('message', messageListener);
-                    
-                    // If already tokens exist, just sync
-                    if (userData?.googleCalendarTokens) handleSync();
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 text-[10px] font-black uppercase tracking-widest transition-all"
-                >
-                  <CalendarIcon size={12} /> + Google Calendar
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <a
+                    href={createGoogleCalendarUrl(item)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 text-[10px] font-black uppercase tracking-wider transition-all border border-blue-500/20 active:scale-95"
+                    title="Buka langsung di Google Calendar"
+                  >
+                    <CalendarIcon size={12} className="text-blue-400" />
+                    <span>+ Google Calendar</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadCalendarIcs([item], `${item.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}.ics`);
+                      showToast('File kalender (.ics) berhasil diunduh', 'success');
+                    }}
+                    className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all text-[10px] font-bold"
+                    title="Unduh file .ics"
+                  >
+                    <Download size={12} />
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button
@@ -618,6 +841,267 @@ export const Agenda: React.FC = () => {
         agendaDate={selectedQRItem?.date}
         agendaLocation={selectedQRItem?.location}
       />
+
+      {/* Modal Otomatisasi AI Jadwal Kegiatan Organisasi */}
+      <AnimatePresence>
+        {isAIModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-3xl bg-[var(--bg-card)] border border-[var(--border-main)] rounded-3xl overflow-hidden shadow-2xl my-8 flex flex-col max-h-[90vh]"
+            >
+              {/* Header */}
+              <div className="p-4 sm:p-5 bg-gradient-to-r from-orange-950/60 to-amber-950/40 border-b border-[var(--border-main)] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-orange-500/20 text-orange-400 border border-orange-500/30">
+                    <Sparkles size={20} className="animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm text-[var(--text-main)] flex items-center gap-2">
+                      Draf Otomatisasi Jadwal Kegiatan (Gemini AI)
+                    </h3>
+                    <p className="text-[11px] text-[var(--text-muted)]">
+                      Hasilkan rundown kegiatan terstandarisasi (MAKESTA, LAKMUD, Konferensi, Raker) siap ekspor ke Google Calendar
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAIModalOpen(false)}
+                  className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-all"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Form & Result Body */}
+              <div className="p-5 sm:p-6 overflow-y-auto space-y-5 custom-scrollbar text-xs">
+                {/* 1. Pilih Template Acara Resmi */}
+                <div>
+                  <label className="text-[11px] font-bold text-zinc-300 block mb-1.5">
+                    Pilih Template Acara Resmi IPNU & IPPNU:
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'MAKESTA', label: 'MAKESTA (2 Hari)' },
+                      { id: 'LAKMUD', label: 'LAKMUD (3 Hari)' },
+                      { id: 'DIKLATAMA', label: 'DIKLATAMA (3 Hari)' },
+                      { id: 'KONFERANCAB', label: 'KONFERANCAB' },
+                      { id: 'RAKER', label: 'RAPAT KERJA' },
+                      { id: 'PELANTIKAN', label: 'PELANTIKAN' },
+                      { id: 'HARLAH', label: 'HARLAH & SHOLAWAT' },
+                      { id: 'CUSTOM', label: 'KUSTOM / LAINNYA' }
+                    ].map(preset => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => applyAIPreset(preset.id)}
+                        className={cn(
+                          "px-2.5 py-2 rounded-xl border text-[11px] font-bold text-center transition-all",
+                          aiForm.templatePreset === preset.id
+                            ? "bg-orange-600 border-orange-500 text-white shadow-sm"
+                            : "bg-[var(--bg-app)] border-[var(--border-main)] text-zinc-300 hover:border-orange-500/40"
+                        )}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Form Konfigurasi Acara */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 p-4 rounded-2xl bg-[var(--bg-app)] border border-[var(--border-main)]">
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Nama Kegiatan</label>
+                    <input
+                      type="text"
+                      value={aiForm.namaKegiatan}
+                      onChange={(e) => setAiForm({ ...aiForm, namaKegiatan: e.target.value })}
+                      placeholder="Masa Kesetiaan Anggota (MAKESTA)"
+                      className="w-full bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-3 py-2 text-xs font-bold text-[var(--text-main)] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Tingkatan & Organisasi</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={aiForm.tingkat}
+                        onChange={(e) => setAiForm({ ...aiForm, tingkat: e.target.value as any })}
+                        className="bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-2.5 py-2 text-xs font-bold text-[var(--text-main)]"
+                      >
+                        <option value="PAC">PAC (Kecamatan)</option>
+                        <option value="PR">PR (Ranting Desa)</option>
+                        <option value="PK">PK (Sekolah/Pesantren)</option>
+                        <option value="PC">PC (Cabang)</option>
+                      </select>
+                      <select
+                        value={aiForm.organisasi}
+                        onChange={(e) => setAiForm({ ...aiForm, organisasi: e.target.value as any })}
+                        className="bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-2.5 py-2 text-xs font-bold text-[var(--text-main)]"
+                      >
+                        <option value="BERSAMA">BERSAMA (IPNU & IPPNU)</option>
+                        <option value="IPNU">IPNU Saja</option>
+                        <option value="IPPNU">IPPNU Saja</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Nama Wilayah / Lembaga</label>
+                    <input
+                      type="text"
+                      value={aiForm.wilayah}
+                      onChange={(e) => setAiForm({ ...aiForm, wilayah: e.target.value })}
+                      placeholder="Kecamatan Palimanan / SMK Bina Insan Mulia"
+                      className="w-full bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-3 py-2 text-xs text-[var(--text-main)] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Tanggal Mulai & Durasi</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="date"
+                        value={aiForm.tanggalMulai}
+                        onChange={(e) => setAiForm({ ...aiForm, tanggalMulai: e.target.value })}
+                        className="bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-2.5 py-2 text-xs font-mono text-[var(--text-main)]"
+                      />
+                      <select
+                        value={aiForm.durasiHari}
+                        onChange={(e) => setAiForm({ ...aiForm, durasiHari: Number(e.target.value) })}
+                        className="bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-2.5 py-2 text-xs font-bold text-[var(--text-main)]"
+                      >
+                        <option value={1}>1 Hari</option>
+                        <option value={2}>2 Hari (1 Malam)</option>
+                        <option value={3}>3 Hari (2 Malam)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Lokasi Venue Kegiatan</label>
+                    <input
+                      type="text"
+                      value={aiForm.lokasi}
+                      onChange={(e) => setAiForm({ ...aiForm, lokasi: e.target.value })}
+                      placeholder="Gedung MWC NU / Balai Desa / Pondok Pesantren"
+                      className="w-full bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-3 py-2 text-xs text-[var(--text-main)] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-zinc-400 block mb-1">Sasaran / Target Peserta</label>
+                    <input
+                      type="text"
+                      value={aiForm.targetPeserta}
+                      onChange={(e) => setAiForm({ ...aiForm, targetPeserta: e.target.value })}
+                      placeholder="Pelajar SLTP/SLTA, Santri, dan Pemuda Desa"
+                      className="w-full bg-[var(--bg-card)] border border-[var(--border-main)] rounded-xl px-3 py-2 text-xs text-[var(--text-main)] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleGenerateAISchedule}
+                    disabled={isAIGenerating}
+                    className={cn(
+                      "flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-black shadow-lg transition-all",
+                      isAIGenerating
+                        ? "bg-zinc-800 text-zinc-400 cursor-not-allowed"
+                        : "bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow-orange-950 active:scale-95"
+                    )}
+                  >
+                    <Wand2 size={16} className={isAIGenerating ? "animate-spin" : ""} />
+                    <span>{isAIGenerating ? 'Sedang Menyusun Jadwal Organisasi...' : 'Hasilkan Draf Jadwal AI'}</span>
+                  </button>
+                </div>
+
+                {/* Hasil Rundown AI */}
+                {aiGeneratedSchedule && (
+                  <div className="space-y-4 pt-4 border-t border-[var(--border-main)]">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-orange-500/10 border border-orange-500/20 rounded-2xl">
+                      <div>
+                        <h4 className="font-black text-xs text-orange-400">
+                          {aiGeneratedSchedule.items?.length || 0} Sesi Kegiatan Telah Terstruktur
+                        </h4>
+                        <p className="text-[11px] text-zinc-300 mt-0.5">
+                          {aiGeneratedSchedule.ringkasanAcara || 'Rundown kegiatan lengkap siap dimasukkan ke sistem dan diekspor ke Google Calendar.'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadCalendarIcs(aiGeneratedSchedule.items, `jadwal_${aiForm.namaKegiatan.toLowerCase().replace(/[^a-z0-9]/g, '_')}.ics`);
+                            showToast('File Google Calendar (.ics) berhasil diunduh', 'success');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
+                        >
+                          <CalendarIcon size={13} /> Ekspor .ICS
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleSaveAllAIToAgenda}
+                          className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow flex items-center gap-1.5 transition-all"
+                        >
+                          <Check size={14} /> Simpan Semua ke Agenda
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Sesi List */}
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                      {aiGeneratedSchedule.items?.map((sesi: any, sIdx: number) => (
+                        <div
+                          key={sIdx}
+                          className="p-3 bg-[var(--bg-app)] border border-[var(--border-main)] rounded-xl flex items-start justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                {sesi.startTime} - {sesi.endTime} WIB
+                              </span>
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                {sesi.date}
+                              </span>
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                                {sesi.category}
+                              </span>
+                            </div>
+                            <h5 className="font-bold text-xs text-[var(--text-main)]">
+                              {sesi.title}
+                            </h5>
+                            <p className="text-[11px] text-[var(--text-muted)] line-clamp-2">
+                              {sesi.description}
+                            </p>
+                          </div>
+
+                          <a
+                            href={createGoogleCalendarUrl(sesi)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/20 shrink-0"
+                            title="Tambahkan sesi ini ke Google Calendar"
+                          >
+                            <CalendarIcon size={14} />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

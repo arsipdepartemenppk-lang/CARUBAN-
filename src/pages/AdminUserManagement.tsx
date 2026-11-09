@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, Users, Search, Filter, Shield, Key, 
   Trash2, Edit2, CheckCircle2, XCircle, AlertCircle, RefreshCw,
-  Sparkles, UserCheck, Lock, Unlock, Mail, Star, Award
+  Sparkles, UserCheck, Lock, Unlock, Mail, Star, Award,
+  ShieldAlert, Activity, FileLock2, KeyRound
 } from 'lucide-react';
 import { collection, onSnapshot, query, orderBy, updateDoc, doc, deleteDoc, setDoc, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
 import { useToast } from '../components/Toast';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { SecurityHealthCheck } from '../components/SecurityHealthCheck';
 import { Role } from '../types';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -32,6 +34,7 @@ export interface AppUser {
   statusPimpinan?: string;
   permissions?: AppUserPermissions;
   isAdminSpecial?: boolean;
+  passwordLastChanged?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -43,6 +46,7 @@ export const AdminUserManagement: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('Semua');
+  const [activeTab, setActiveTab] = useState<'users' | 'security'>('users');
 
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
   const [newRole, setNewRole] = useState<Role>('user');
@@ -76,11 +80,8 @@ export const AdminUserManagement: React.FC = () => {
   }, []);
 
   const isSyifaudinAccount = (u: AppUser) => {
-    const email = (u.email || '').toLowerCase();
-    const name = (u.displayName || '').toLowerCase();
+    const email = (u.email || '').toLowerCase().trim();
     return (
-      email.includes('syifaudin') ||
-      name.includes('syifaudin') ||
       email === 'arsipdepartemenppk@gmail.com' ||
       email === 'arsipdepartemenpendidikan@gmail.com' ||
       email === 'syifaudina15@gmail.com'
@@ -219,8 +220,45 @@ export const AdminUserManagement: React.FC = () => {
         </div>
       </div>
 
-      {/* SPECIAL MODULE: Dedicated Ahmad Syifaudin Admin Assignment */}
-      <div className="bg-gradient-to-r from-red-950/40 via-red-900/20 to-[var(--bg-card)] border-2 border-red-500/40 rounded-3xl p-6 shadow-xl relative overflow-hidden">
+      {/* Primary Navigation Tabs: User Management vs Security Health Check */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border-main)] pb-4">
+        <button
+          onClick={() => setActiveTab('users')}
+          className={cn(
+            "px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2.5 active:scale-95",
+            activeTab === 'users'
+              ? "bg-red-600 text-white shadow-lg shadow-red-600/25"
+              : "bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--text-main)] border border-[var(--border-main)]"
+          )}
+        >
+          <Users size={16} />
+          <span>Manajemen Pengguna & Hak Akses</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-black/20">
+            {users.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('security')}
+          className={cn(
+            "px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2.5 active:scale-95",
+            activeTab === 'security'
+              ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-600/25"
+              : "bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--text-main)] border border-[var(--border-main)]"
+          )}
+        >
+          <ShieldAlert size={16} />
+          <span>Security Health Check & Audit Enkripsi</span>
+          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+            AES-256 + HMAC
+          </span>
+        </button>
+      </div>
+
+      {activeTab === 'users' ? (
+        <div className="space-y-6">
+          {/* SPECIAL MODULE: Dedicated Ahmad Syifaudin Admin Assignment */}
+          <div className="bg-gradient-to-r from-red-950/40 via-red-900/20 to-[var(--bg-card)] border-2 border-red-500/40 rounded-3xl p-6 shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 -mr-6 -mt-6 w-32 h-32 bg-red-500/10 rounded-full blur-2xl pointer-events-none" />
         
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
@@ -471,8 +509,12 @@ export const AdminUserManagement: React.FC = () => {
           </table>
         </div>
       </div>
+    </div>
+  ) : (
+    <SecurityHealthCheck users={users} currentUser={currentUser} currentRole={currentRole} />
+  )}
 
-      {/* Role & Permissions Change Modal */}
+  {/* Role & Permissions Change Modal */}
       <AnimatePresence>
         {isRoleModalOpen && selectedUser && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">

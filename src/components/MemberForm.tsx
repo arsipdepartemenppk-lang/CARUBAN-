@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   UserPlus, Upload, X, Camera, RefreshCw, Sparkles, CheckCircle2, 
-  AlertCircle, Trash2, ShieldCheck, UserCheck, Eye, EyeOff, GraduationCap
+  AlertCircle, Trash2, ShieldCheck, UserCheck, Eye, EyeOff, GraduationCap, Building2
 } from 'lucide-react';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { db } from '../firebase';
 import { cn } from '../lib/utils';
 import { useToast } from './Toast';
 import { 
@@ -43,12 +45,24 @@ export const MemberForm: React.FC<MemberFormProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isPhotoProcessing, setIsPhotoProcessing] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isStartingCamera, setIsStartingCamera] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [autoNiaGenerated, setAutoNiaGenerated] = useState(false);
+  const [availablePKs, setAvailablePKs] = useState<any[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'pks'), orderBy('namaPK', 'asc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAvailablePKs(data);
+    }, (err) => {
+      console.warn('Notice loading PKs for member form:', err);
+    });
+    return () => unsub();
+  }, []);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
 
   // Jika form dibuka dan NIA masih kosong, buat otomatis secara instan
   useEffect(() => {
@@ -129,57 +143,134 @@ export const MemberForm: React.FC<MemberFormProps> = ({
 
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
 
-  // Pastikan stream video langsung terpasang saat elemen video ter-render di DOM
-  useEffect(() => {
-    if (isCameraActive && cameraStream && videoRef.current) {
-      const video = videoRef.current;
-      video.srcObject = cameraStream;
-      video.onloadedmetadata = () => {
-        video.play().catch(err => {
-          console.warn('Autoplay prevented or camera stream error:', err);
-        });
-      };
-      video.play().catch(() => {});
+  // Ref callback to reliably attach stream as soon as video DOM node mounts in React
+  const handleVideoRef = (node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    if (node && cameraStream) {
+      if (node.srcObject !== cameraStream) {
+        node.srcObject = cameraStream;
+        node.play().catch(err => console.warn('Video play error on ref attach:', err));
+      }
     }
-  }, [isCameraActive, cameraStream]);
+  };
+
+  // Ensure stream stays attached if stream changes while mounted
+  useEffect(() => {
+    if (videoRef.current && cameraStream) {
+      if (videoRef.current.srcObject !== cameraStream) {
+        videoRef.current.srcObject = cameraStream;
+        videoRef.current.play().catch(err => console.warn('Video play error on stream update:', err));
+      }
+    }
+  }, [cameraStream, isCameraActive]);
+
+  // Handle unmount - stop all tracks
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [cameraStream]);
+
+  // Native camera ref for mobile devices
+  const nativeCameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper to call getUserMedia with a timeout to allow user time to click Allow on browser permission prompt
+  const getUserMediaWithTimeout = (constraints: MediaStreamConstraints, timeoutMs = 10000): Promise<MediaStream> => {
+    return new Promise((resolve, reject) => {
+      let isSettled = false;
+      const timer = setTimeout(() => {
+        if (!isSettled) {
+          isSettled = true;
+          const err = new Error('Timeout starting video source');
+          err.name = 'TimeoutError';
+          reject(err);
+        }
+      }, timeoutMs);
+
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then(stream => {
+          if (!isSettled) {
+            isSettled = true;
+            clearTimeout(timer);
+            resolve(stream);
+          } else {
+            stream.getTracks().forEach(t => t.stop());
+          }
+        })
+        .catch(err => {
+          if (!isSettled) {
+            isSettled = true;
+            clearTimeout(timer);
+            reject(err);
+          }
+        });
+    });
+  };
 
   // Live Camera Handlers
   const startCamera = async (targetFacing: 'user' | 'environment' = facingMode) => {
+    // 1. Reset states
+    setIsStartingCamera(true);
+
+    // 2. Stop existing stream if any
     if (cameraStream) {
       cameraStream.getTracks().forEach(t => t.stop());
       setCameraStream(null);
     }
 
     if (!navigator?.mediaDevices?.getUserMedia) {
-      showToast('Kamera live web tidak didukung. Membuka kamera bawaan perangkat...', 'info');
+      showToast('Kamera live tidak didukung di browser ini. Membuka kamera bawaan...', 'info');
+      setIsStartingCamera(false);
       nativeCameraInputRef.current?.click();
       return;
     }
 
-    try {
-      let stream: MediaStream;
+    // Try multiple constraints from specific to general for better compatibility
+    const constraintOptions = [
+      { video: { facingMode: targetFacing }, audio: false },
+      { video: true, audio: false }
+    ];
+
+    let success = false;
+    let lastError: any = null;
+
+    for (const constraints of constraintOptions) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: targetFacing, width: { ideal: 640 }, height: { ideal: 640 } },
-          audio: false
-        });
-      } catch (e) {
-        // Fallback for browsers or external webcams that don't support facingMode constraint
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false
-        });
+        console.log('Attempting camera with constraints:', constraints);
+        // Give 10s so user can click "Allow" / "Izinkan" on browser permission popup
+        const stream = await getUserMediaWithTimeout(constraints, 10000);
+        
+        setFacingMode(targetFacing);
+        setCameraStream(stream);
+        setIsCameraActive(true);
+        setIsStartingCamera(false);
+        success = true;
+        console.log('Camera started successfully');
+        break;
+      } catch (err: any) {
+        lastError = err;
+        console.warn('Camera constraint attempt failed:', constraints, err);
       }
-      setFacingMode(targetFacing);
-      setCameraStream(stream);
-      setIsCameraActive(true);
-    } catch (err: any) {
-      console.warn('Kamera live tidak dapat diakses, beralih ke kamera bawaan perangkat:', err);
+    }
+
+    if (!success) {
+      console.warn('Camera stream acquisition unavailable:', lastError?.message || lastError);
+      setIsStartingCamera(false);
       setIsCameraActive(false);
-      showToast('Kamera live tidak aktif. Membuka kamera bawaan perangkat...', 'info');
-      setTimeout(() => {
-        nativeCameraInputRef.current?.click();
-      }, 300);
+
+      if (lastError?.name === 'NotAllowedError') {
+        showToast('Izin kamera belum diberikan. Membuka pemilih foto/kamera HP...', 'info');
+        setTimeout(() => {
+          nativeCameraInputRef.current?.click();
+        }, 300);
+      } else {
+        showToast('Kamera live tidak merespons. Membuka pemilih foto/kamera HP...', 'info');
+        setTimeout(() => {
+          nativeCameraInputRef.current?.click();
+        }, 300);
+      }
     }
   };
 
@@ -194,37 +285,54 @@ export const MemberForm: React.FC<MemberFormProps> = ({
       setCameraStream(null);
     }
     setIsCameraActive(false);
+    setIsStartingCamera(false);
   };
 
-  const capturePhoto = () => {
-    if (!videoRef.current) return;
+  const capturePhoto = async () => {
+    if (!videoRef.current || !cameraStream) return;
+    
+    setIsPhotoProcessing(true);
     try {
       const video = videoRef.current;
-      const width = video.videoWidth > 0 ? video.videoWidth : 640;
-      const height = video.videoHeight > 0 ? video.videoHeight : 480;
+      
+      // Ensure we have valid video dimensions
+      const width = video.videoWidth || 640;
+      const height = video.videoHeight || 480;
+      
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        if (facingMode === 'user') {
-          // mirror foto jika kamera depan agar sesuai cermin
-          ctx.translate(width, 0);
-          ctx.scale(-1, 1);
-        }
-        ctx.drawImage(video, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-        setFormData((prev: any) => ({
-          ...prev,
-          foto: dataUrl,
-          fotoUrl: dataUrl
-        }));
-        showToast('Foto profil anggota berhasil diambil', 'success');
+      
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('Could not initialize canvas context');
+
+      // Handle mirroring
+      if (facingMode === 'user') {
+        ctx.translate(width, 0);
+        ctx.scale(-1, 1);
       }
-    } catch (err: any) {
-      showToast('Gagal menangkap foto: ' + err.message, 'error');
-    } finally {
+      
+      ctx.drawImage(video, 0, 0, width, height);
+      
+      // Convert to blob for processing
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+      if (!blob) throw new Error('Failed to create image blob');
+
+      const result = await processAndUploadMemberPhoto(blob, formData.namaLengkap || 'kader');
+      
+      setFormData((prev: any) => ({
+        ...prev,
+        foto: result.url,
+        fotoUrl: result.url
+      }));
+      
+      showToast('Foto profil anggota berhasil diambil', 'success');
       stopCamera();
+    } catch (err: any) {
+      console.error('Photo capture error:', err);
+      showToast('Gagal menangkap foto: ' + (err.message || 'Error internal'), 'error');
+    } finally {
+      setIsPhotoProcessing(false);
     }
   };
 
@@ -302,47 +410,60 @@ export const MemberForm: React.FC<MemberFormProps> = ({
         </div>
 
         {/* Live Camera Viewfinder Modal / Inline */}
-        {isCameraActive ? (
+        {(isCameraActive || isStartingCamera) ? (
           <div className="flex flex-col items-center justify-center p-4 bg-black/50 rounded-2xl border border-emerald-500/40 gap-4 shadow-xl">
-            <div className="relative w-64 h-64 rounded-2xl overflow-hidden border-2 border-emerald-500 shadow-2xl bg-black">
-              <video 
-                ref={(el) => {
-                  videoRef.current = el;
-                  if (el && cameraStream && el.srcObject !== cameraStream) {
-                    el.srcObject = cameraStream;
-                    el.play().catch(() => {});
-                  }
-                }}
-                autoPlay 
-                playsInline 
-                muted 
-                style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
-                className="w-full h-full object-cover"
-              />
-              {/* Face Guide Oval */}
-              <div className="absolute inset-6 border-2 border-dashed border-emerald-400/60 rounded-full pointer-events-none opacity-70 animate-pulse" />
-              <div className="absolute top-2 left-2 bg-emerald-600/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" /> Live Kamera ({facingMode === 'user' ? 'Depan' : 'Belakang'})
-              </div>
+            <div className="relative w-64 h-64 rounded-2xl overflow-hidden border-2 border-emerald-500 shadow-2xl bg-black flex items-center justify-center">
+              {isStartingCamera ? (
+                <div className="flex flex-col items-center gap-2">
+                  <RefreshCw className="animate-spin text-emerald-500" size={32} />
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-tighter">Memulai Sensor...</span>
+                </div>
+              ) : (
+                <>
+                  <video 
+                    ref={videoRef}
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Face Guide Oval */}
+                  <div className="absolute inset-6 border-2 border-dashed border-emerald-400/60 rounded-full pointer-events-none opacity-70 animate-pulse" />
+                  <div className="absolute top-2 left-2 bg-emerald-600/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" /> Live Kamera ({facingMode === 'user' ? 'Depan' : 'Belakang'})
+                  </div>
 
-              <button
-                type="button"
-                onClick={toggleFacingMode}
-                title="Ganti Kamera Depan / Belakang"
-                className="absolute top-2 right-2 p-1.5 rounded-xl bg-black/70 hover:bg-black text-white text-xs border border-white/20 transition-all shadow"
-              >
-                <RefreshCw size={14} />
-              </button>
+                  <button
+                    type="button"
+                    onClick={toggleFacingMode}
+                    title="Ganti Kamera Depan / Belakang"
+                    className="absolute top-2 right-2 p-1.5 rounded-xl bg-black/70 hover:bg-black text-white text-xs border border-white/20 transition-all shadow"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                </>
+              )}
             </div>
 
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={capturePhoto}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 flex items-center gap-2 active:scale-95 transition-all"
+                disabled={isStartingCamera || !isCameraActive || isPhotoProcessing}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 flex items-center gap-2 active:scale-95 transition-all disabled:opacity-50"
               >
-                <Camera size={15} />
-                Ambil Gambar
+                {isPhotoProcessing ? (
+                  <>
+                    <RefreshCw size={15} className="animate-spin" />
+                    Memproses...
+                  </>
+                ) : (
+                  <>
+                    <Camera size={15} />
+                    Ambil Gambar
+                  </>
+                )}
               </button>
               <button
                 type="button"
@@ -397,7 +518,7 @@ export const MemberForm: React.FC<MemberFormProps> = ({
                   className="hidden" 
                 />
 
-                {/* Direct native smartphone camera input */}
+                {/* Native camera file picker for mobile direct camera capture */}
                 <input 
                   type="file" 
                   ref={nativeCameraInputRef} 
@@ -425,17 +546,6 @@ export const MemberForm: React.FC<MemberFormProps> = ({
                 >
                   <Camera size={14} />
                   <span>Ambil via Kamera</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => nativeCameraInputRef.current?.click()}
-                  disabled={isPhotoProcessing || externalUploading}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--border-main)] text-[var(--text-main)] border border-[var(--border-main)] text-xs font-bold transition-all shadow-sm"
-                  title="Buka kamera aplikasi HP secara langsung"
-                >
-                  <Sparkles size={13} className="text-amber-400" />
-                  <span>Kamera HP</span>
                 </button>
               </div>
 
@@ -646,22 +756,95 @@ export const MemberForm: React.FC<MemberFormProps> = ({
             {errors.email && <p className="text-[10px] text-rose-500">{errors.email}</p>}
           </div>
 
-          {/* Nama Sekolah / Madrasah / Pesantren */}
-          <div className="space-y-1.5">
-            <label htmlFor="namaSekolah" className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
-              Sekolah / Madrasah / Pesantren <span className="text-rose-500">*</span>
-            </label>
-            <input
-              id="namaSekolah"
-              type="text"
-              value={formData.namaSekolah || ''}
-              onChange={(e) => setFormData({ ...formData, namaSekolah: e.target.value })}
-              placeholder="Contoh: MA NU Cirebon / Ponpes Babakan"
-              className={cn(
-                "w-full bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
-                errors.namaSekolah ? "border-rose-500" : "border-[var(--border-main)]"
+          {/* Nama Sekolah / Madrasah / Pesantren (Sinkron dengan Master PK) */}
+          <div className="space-y-1.5 sm:col-span-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="namaSekolah" className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                <Building2 size={13} className="text-emerald-500" />
+                Sekolah / Madrasah / Pesantren (Basis PK) <span className="text-rose-500">*</span>
+              </label>
+              {availablePKs.length > 0 && (
+                <span className="text-[10px] text-teal-400 font-bold bg-teal-500/10 px-2 py-0.5 rounded-full border border-teal-500/20">
+                  {availablePKs.length} Master PK Terdaftar
+                </span>
               )}
-            />
+            </div>
+            
+            <div className="space-y-2">
+              <input
+                id="namaSekolah"
+                list="master-pks-list"
+                type="text"
+                value={formData.namaSekolah || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const matched = availablePKs.find(p => (p.namaPK || '').toLowerCase() === val.toLowerCase());
+                  if (matched) {
+                    setFormData((prev: any) => ({
+                      ...prev,
+                      namaSekolah: matched.namaPK,
+                      alamatSekolah: matched.alamat || prev.alamatSekolah,
+                      kecamatan: matched.kecamatan || prev.kecamatan,
+                      zona: matched.zona || prev.zona,
+                      pkId: matched.id
+                    }));
+                  } else {
+                    setFormData((prev: any) => ({ ...prev, namaSekolah: val }));
+                  }
+                }}
+                placeholder="Ketik atau pilih nama Pimpinan Komisariat (contoh: MA NU Cirebon)..."
+                className={cn(
+                  "w-full bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                  errors.namaSekolah ? "border-rose-500" : "border-[var(--border-main)]"
+                )}
+              />
+              <datalist id="master-pks-list">
+                {availablePKs.map((pk) => (
+                  <option key={pk.id} value={pk.namaPK}>
+                    {pk.kecamatan ? `Kec. ${pk.kecamatan} (${pk.zona || ''})` : pk.zona}
+                  </option>
+                ))}
+              </datalist>
+
+              {/* Quick Recommendation Pill Buttons */}
+              {availablePKs.length > 0 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[10px] custom-scrollbar">
+                  <span className="text-zinc-500 shrink-0 font-bold text-[9px] uppercase tracking-wider">Pilih Cepat:</span>
+                  {availablePKs.slice(0, 5).map((pk) => (
+                    <button
+                      key={pk.id}
+                      type="button"
+                      onClick={() => {
+                        setFormData((prev: any) => ({
+                          ...prev,
+                          namaSekolah: pk.namaPK,
+                          alamatSekolah: pk.alamat || prev.alamatSekolah,
+                          kecamatan: pk.kecamatan || prev.kecamatan,
+                          zona: pk.zona || prev.zona,
+                          pkId: pk.id
+                        }));
+                      }}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg border text-nowrap shrink-0 transition-all text-[11px]",
+                        formData.namaSekolah === pk.namaPK
+                          ? "bg-emerald-600 text-white border-emerald-500 font-bold shadow-sm"
+                          : "bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border-main)] hover:border-zinc-500"
+                      )}
+                    >
+                      {pk.namaPK}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Verified Synchronization Badge */}
+              {formData.pkId && (
+                <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20 w-fit">
+                  <CheckCircle2 size={12} />
+                  <span>Tersinkronisasi otomatis dengan Data Master PK ({availablePKs.find(p => p.id === formData.pkId)?.zona || 'Kab. Cirebon'})</span>
+                </div>
+              )}
+            </div>
             {errors.namaSekolah && <p className="text-[10px] text-rose-500">{errors.namaSekolah}</p>}
           </div>
 
