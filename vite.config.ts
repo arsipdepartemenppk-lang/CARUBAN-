@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
-  base: '/CARUBAN-/', arsipdepartemenppk-lang/
+  base: '/CARUBAN-/' // arsipdepartemenppk-lang/
   const env = loadEnv(mode, '.', '');
   return {
     define: {
