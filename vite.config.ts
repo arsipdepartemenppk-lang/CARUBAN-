@@ -10,7 +10,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
+  plugins: [react()],
   base: '/CARUBAN-/' // arsipdepartemenppk-lang/
+  });
   const env = loadEnv(mode, '.', '');
   return {
     define: {
